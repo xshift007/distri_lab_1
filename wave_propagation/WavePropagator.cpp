@@ -173,8 +173,13 @@ void WavePropagator::demo_data_clauses(const char* out_path){
 }
 void WavePropagator::run(int steps, ScheduleType st, int chunk, SyncMethod sm, const char* energy_trace_path) {
     std::filesystem::create_directories("results");
-    std::ofstream fout(energy_trace_path);
-    if (fout) fout << "# t E(t)\n";
+    std::ofstream fout;
+    bool write = (energy_trace_path && energy_trace_path[0] != '\0');
+    if (write) {
+        std::filesystem::create_directories("results");
+        fout.open(energy_trace_path);
+        if (fout) fout << "# t E(t)\n";
+    }
     for (int t=0; t<steps; ++t) {
         step_schedule(st, chunk);
         commit_with_barrier();
@@ -182,13 +187,18 @@ void WavePropagator::run(int steps, ScheduleType st, int chunk, SyncMethod sm, c
         if (sm == SyncMethod::Reduction) energy_reduction(E);
         else if (sm == SyncMethod::Atomic) energy_atomic(E);
         else energy_critical(E);
-        if (fout) fout << (t+1) << " " << E << "\n";
+        if (write && fout) fout << (t+1) << " " << E << "\n";
     }
 }
 void WavePropagator::process_with_tasks(int steps, int grain, SyncMethod sm, const char* energy_trace_path){
     std::filesystem::create_directories("results");
-    std::ofstream fout(energy_trace_path);
-    if (fout) fout << "# t E(t)\n";
+    std::ofstream fout;
+    bool write = (energy_trace_path && energy_trace_path[0] != '\0');
+    if (write) {
+        std::filesystem::create_directories("results");
+        fout.open(energy_trace_path);
+        if (fout) fout << "# t E(t)\n";
+    }
     auto& nodes = net_->data();
     const int N = net_->size();
     const double D = net_->diffusion();
@@ -218,7 +228,7 @@ void WavePropagator::process_with_tasks(int steps, int grain, SyncMethod sm, con
         if (sm == SyncMethod::Reduction) energy_reduction(E);
         else if (sm == SyncMethod::Atomic) energy_atomic(E);
         else energy_critical(E);
-        if (fout) fout << (it+1) << " " << E << "\n";
+        if (write && fout) fout << (it+1) << " " << E << "\n";
         tcur_ += dt_;
     }
 }

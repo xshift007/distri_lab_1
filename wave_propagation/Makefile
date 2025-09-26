@@ -14,7 +14,7 @@ clean:
 
 benchmark: $(TARGET)
 	mkdir -p results
-	./$(TARGET) --benchmark --threads 1,2,4,8
+	OMP_PROC_BIND=close OMP_PLACES=cores OMP_WAIT_POLICY=active ./$(TARGET) --benchmark --threads 1,2,4,8 --network 2d --Lx 512 --Ly 512 --steps 1000 --schedule dynamic --chunk 32 --sync reduction
 
 analysis: $(TARGET)
 	mkdir -p results

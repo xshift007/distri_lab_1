@@ -116,6 +116,12 @@ int main(int argc, char** argv){
             {1,8,32,64,256}, /*threads*/8, /*reps*/5, "results/schedule_vs_chunk.dat");
         Benchmark::run_sync_methods(net, args.steps, st, args.chunk, /*threads*/8, /*reps*/5, "results/sync_methods.dat");
         Benchmark::run_tasks_vs_for(net, args.steps, st, args.chunk, sm, /*threads*/8, /*reps*/5, /*grain*/500, "results/tasks_vs_for.dat");
+        // Con I/O para comparar (Amdahl con escritura de archivo)
+        Benchmark::run_scaling_io(net, args.steps, st, args.chunk, sm, plist, /*reps*/5, "results/scaling_io.dat");
+        // Barrido de granularidad de tasks
+        Benchmark::run_tasks_grain_sweep(net, args.steps, sm, /*threads*/8, /*reps*/5,
+            std::vector<int>{128,256,512,1024,4096}, "results/tasks_grain.dat");
+
         std::cout << "Benchmarks listos. Revisa carpeta results/ y usa scripts/plot_speedup.py y scripts/plot_benchmarks.py\n";
         return 0;
     }

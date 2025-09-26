@@ -16,4 +16,13 @@ public:
     static void run_tasks_vs_for(Network& net, int steps, ScheduleType st, int chunk,
                                  SyncMethod sm, int threads, int reps, int grain,
                                  const std::string& out_path);
+
+    static void run_scaling_io(Network& net, int steps, ScheduleType st, int chunk,
+                               SyncMethod sm, const std::vector<int>& threads_list,
+                               int reps, const std::string& out_scaling_path);
+
+    static void run_tasks_grain_sweep(Network& net, int steps, SyncMethod sm,
+                                      int threads, int reps,
+                                      const std::vector<int>& grains,
+                                      const std::string& out_path);
 };
