@@ -1,35 +1,47 @@
-// Benchmark.h
-// Clase encargada de ejecutar diferentes experimentos de rendimiento sobre
-// la simulación de propagación de ondas. Mide tiempos de ejecución con
-// diferentes configuraciones de hilos y cláusulas de OpenMP, calcula métricas
-// (speedup, eficiencia, error de propagación) y guarda los resultados en
-// archivos .dat para su posterior visualización.
-
-#pragma once
-
-#include "Network.h"
-#include "WavePropagator.h"
-#include "Integrator.h"
-#include "MetricsCalculator.h"
+#ifndef BENCHMARK_H
+#define BENCHMARK_H
 
 #include <string>
+#include <vector>
+
+#include "PerformanceMetrics.h"
+
+class Network;
+class WavePropagator;
+class NetworkStatePrinter;
+
+struct ScheduleResults {
+    std::string scheduleName;
+    std::vector<ParallelMetrics> metrics;
+};
 
 class Benchmark {
-private:
-    int iterations;        // Número de pasos de tiempo a simular en cada ejecución
-    int repetitions;       // Número de repeticiones para promediar tiempos
-
-    // Ejecuta una simulación completa (propagando la onda) y devuelve el tiempo de ejecución
-    double runSimulation(Network &net, int steps);
-
-    // Ejecuta integrateEuler con sync_type dado y devuelve el tiempo de ejecución
-    double runIntegration(WavePropagator &prop, int sync_type, int steps);
-
 public:
-    Benchmark(int iters = 100, int reps = 5);
-    // Ejecución de un benchmark de escalabilidad variando el número de hilos
-    void runScalabilityBenchmark(int maxThreads, const std::string &filename);
+    Benchmark(int maxThreads, int repeatsSmall, int repeatsLarge);
 
-    // Benchmark para comparar tipos de scheduling y tamaños de chunk
-    void runScheduleBenchmark(const std::string &filename);
+    void setPrinter(NetworkStatePrinter* printerInstance);
+
+    int getMaxThreads() const;
+    int getRepeatsSmall() const;
+    int getRepeatsLarge() const;
+
+    void runDemonstration(Network& network, WavePropagator& propagator, const std::string& title);
+
+    ScheduleResults measureSchedule(Network& network, WavePropagator& propagator,
+                                    int scheduleType, int repeats, const std::string& scheduleName);
+
+    void printScheduleResults(const ScheduleResults& results) const;
+
+    void applyCentralImpulse(Network& network, double amplitude = 1.0) const;
+
+private:
+    std::vector<double> runTimedSamples(Network& network, WavePropagator& propagator,
+                                        int scheduleType, int repeats) const;
+
+    int maxThreads;
+    int repeatsSmall;
+    int repeatsLarge;
+    NetworkStatePrinter* printer;
 };
+
+#endif

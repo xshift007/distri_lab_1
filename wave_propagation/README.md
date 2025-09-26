@@ -1,97 +1,53 @@
-# Simulador de Propagación de Ondas en Redes
+# Simulador de propagación de ondas
 
-Este proyecto implementa un simulador de propagación de ondas en redes de nodos
-utilizando programación paralela con **OpenMP** en C++. El objetivo es estudiar
-el comportamiento de una señal que se transmite entre nodos conectados y
-analizar el rendimiento de distintas configuraciones paralelas.
+Este laboratorio modela la propagación de una señal sobre redes regulares mediante un
+enfoque orientado a objetos. El código final se organiza en clases con responsabilidades
+claras y acota la experimentación a topologías 1D y 2D, tal como permiten las
+instrucciones de la ayudantía.
 
-## Estructura del proyecto
+## Arquitectura orientada a objetos
 
-```
-wave_propagation/
-├── main.cpp                # Programa principal
-├── Node.h / Node.cpp       # Clase Node para representar nodos
-├── Network.h / Network.cpp # Clase Network para manejar la topología
-├── WavePropagator.h/.cpp   # Clase WavePropagator para la integración temporal
-├── Integrator.h/.cpp       # Clase Integrator (envoltorio de WavePropagator)
-├── MetricsCalculator.h/.cpp# Cálculo de métricas de performance
-├── Benchmark.h/.cpp        # Ejecución de benchmarks y generación de datos
-├── Visualizer.h/.cpp       # Generación de gráficas a partir de datos
-├── Makefile                # Script de compilación
-└── README.md               # Este archivo
-```
+- **Node** encapsula el estado de cada vértice (amplitud actual, vecinos y valor
+  provisional). Expone operaciones para actualizar la amplitud a partir de la ecuación
+de difusión.
+- **Network** administra la topología (línea 1D o grilla 2D) y los parámetros físicos.
+  Ofrece utilidades para inicializar conexiones, reiniciar la condición inicial y aplicar
+  los valores calculados.
+- **WavePropagator** realiza la integración temporal (Euler explícito) con una única
+  región paralela que reutiliza hilos y soporta los _schedules_ estático, dinámico y
+  guiado.
+- **NetworkStatePrinter**, **PerformanceMetrics** y **Benchmark** separan la
+  visualización, el cálculo de métricas (promedio, desviación estándar, _speedup_,
+  eficiencia, fracción serial) y la ejecución de experimentos.
 
-## Compilación
+Esta división evita concentrar la lógica en `main.cpp` o en una sola clase, y mantiene el
+proyecto estrictamente dentro del paradigma orientado a objetos.
 
-Para compilar el programa es necesario tener instalado `g++` con soporte
-para OpenMP y C++17. Desde la raíz del proyecto `wave_propagation`, ejecute:
+## Flexibilidad de OpenMP
+
+Se emplean tres variantes de `schedule` (`static`, `dynamic`, `guided`) y la cláusula
+`runtime` para permitir que el tipo de planificación se configure desde las funciones de
+medición. No se incluyen cláusulas adicionales (por ejemplo `collapse`, regiones `task`
+o sincronizaciones `atomic/critical`) porque el foco del informe está en el impacto del
+_scheduling_. Esta omisión está permitida por la flexibilidad indicada en la pauta y se
+encuentra documentada en el código.
+
+## Topologías consideradas
+
+Las rutinas de inicialización de la clase `Network` sólo construyen redes en línea (1D) y
+grilas regulares (2D). El `main` demuestra ambos casos:
+
+1. Visualización de la propagación paso a paso en una línea 1D de 10 nodos.
+2. Visualización equivalente en una grilla 2D de 4×4 nodos.
+3. Benchmark de rendimiento sobre una línea 1D de 10 000 nodos para analizar _speedup_ y
+eficiencia con 1–4 hilos.
+
+## Compilación y ejecución
 
 ```bash
 make
+./wave_propagation
 ```
 
-Esto generará un ejecutable llamado `wave_propagation`.
-
-## Uso
-
-El programa se puede ejecutar en tres modos:
-
-1. **Simulación básica (por defecto)**
-
-   Ejecuta una pequeña simulación de 100 nodos durante 10 pasos de tiempo y
-   muestra la energía total al final.
-
-   ```bash
-   ./wave_propagation
-   ```
-
-2. **Benchmark de escalabilidad**
-
-   Ejecuta un benchmark variando el número de hilos desde 1 hasta el número
-   máximo disponible en el sistema. Repite cada medición 5 veces y calcula
-   promedios y desviaciones estándar. Los resultados se guardan en
-   `benchmark_results.dat` y se genera una gráfica de speedup en `speedup.png`.
-
-   ```bash
-   ./wave_propagation -benchmark
-   ```
-
-3. **Análisis de resultados**
-
-   A partir de un archivo de resultados (`benchmark_results.dat`) existente,
-   genera las gráficas correspondientes. Actualmente se produce el gráfico
-   de speedup. Se asume que el archivo `benchmark_results.dat` ya existe.
-
-   ```bash
-   ./wave_propagation -analysis
-   ```
-
-4. **Benchmark de schedules**
-
-   Ejecuta pruebas que comparan diferentes tipos de `schedule` de OpenMP
-   (`static`, `dynamic`, `guided`) y varios tamaños de `chunk`. Los resultados se
-   guardan en `schedule_results.dat`. Actualmente la aplicación no genera
-   automáticamente las gráficas para este benchmark; se pueden utilizar los
-   scripts de Python proporcionados (o el método `Visualizer`) para procesar
-   dicho archivo.
-
-   ```bash
-   ./wave_propagation -schedule
-   ```
-
-## Limpieza
-
-Para limpiar el directorio de build y eliminar archivos generados (ejecutable,
-datos y gráficas), utilice:
-
-```bash
-make clean
-```
-
-## Notas
-
-- Este proyecto es un ejemplo didáctico inspirado en un laboratorio universitario.
-- Las implementaciones de métodos avanzados (por ejemplo, variaciones de
-  scheduling o sincronización) se incluyen principalmente como demostración.
-- Para una experimentación más completa, considere ajustar el tamaño de la red,
-  el número de pasos de tiempo y el número de repeticiones en los benchmarks.
+Compilar con `-fopenmp` (incluido en el `Makefile`) es obligatorio para habilitar las
+secciones paralelas.

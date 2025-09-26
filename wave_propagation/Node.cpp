@@ -1,39 +1,37 @@
-// Node.cpp
-// Implementación de los métodos de la clase Node.
-
 #include "Node.h"
 
-Node::Node(int node_id, double initial_amplitude)
-    : id(node_id), amplitude(initial_amplitude), previous_amplitude(initial_amplitude) {}
+Node::Node() : neighbors(), value(0.0), newValue(0.0) {}
 
-void Node::addNeighbor(int neighbor_id) {
-    neighbors.push_back(neighbor_id);
+void Node::setValue(double val) {
+    value = val;
 }
 
-void Node::setAmplitude(double new_amplitude) {
-    amplitude = new_amplitude;
+double Node::getValue() const {
+    return value;
 }
 
-void Node::setPreviousAmplitude(double prev) {
-    previous_amplitude = prev;
+void Node::addNeighbor(int idx) {
+    neighbors.push_back(idx);
 }
 
-double Node::getAmplitude() const {
-    return amplitude;
-}
-
-double Node::getPreviousAmplitude() const {
-    return previous_amplitude;
-}
-
-int Node::getId() const {
-    return id;
+void Node::clearNeighbors() {
+    neighbors.clear();
 }
 
 const std::vector<int>& Node::getNeighbors() const {
     return neighbors;
 }
 
-int Node::getDegree() const {
-    return static_cast<int>(neighbors.size());
+void Node::computeNewValue(double diff_coeff, double damp_coeff, double time_step,
+                           const std::vector<Node>& allNodes, double external) {
+    double sum_diff = 0.0;
+    for (int neighbor : neighbors) {
+        sum_diff += (allNodes[neighbor].value - value);
+    }
+    newValue = value + time_step * (diff_coeff * sum_diff - damp_coeff * value + external);
 }
+
+void Node::applyNewValue() {
+    value = newValue;
+}
+
