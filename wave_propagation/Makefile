@@ -3,21 +3,19 @@ CXXFLAGS = -Wall -Wextra -O3 -fopenmp -std=c++17
 LDFLAGS = -fopenmp
 TARGET = wave_propagation
 
-SOURCES = main.cpp Node.cpp Network.cpp WavePropagator.cpp Integrator.cpp MetricsCalculator.cpp Benchmark.cpp Visualizer.cpp
-HEADERS = Node.h Network.h WavePropagator.h Integrator.h MetricsCalculator.h Benchmark.h Visualizer.h
+SOURCES = main.cpp Node.cpp Network.cpp WavePropagator.cpp           NetworkStatePrinter.cpp PerformanceMetrics.cpp Benchmark.cpp
+OBJECTS = $(SOURCES:.cpp=.o)
+HEADERS = Node.h Network.h WavePropagator.h NetworkStatePrinter.h           PerformanceMetrics.h Benchmark.h
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) $(HEADERS)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
+$(TARGET): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS)
+
+%.o: %.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) *.o *.dat *.png
+	rm -f $(TARGET) $(OBJECTS)
 
-benchmark: $(TARGET)
-	./$(TARGET) -benchmark
-
-analysis: $(TARGET)
-	./$(TARGET) -analysis
-
-.PHONY: all clean benchmark analysis
+.PHONY: all clean
