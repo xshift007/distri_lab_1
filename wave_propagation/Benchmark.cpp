@@ -5,6 +5,7 @@
 #include <numeric>
 #include <algorithm>
 #include <string>
+#include <filesystem>
 
 static inline double mean(const std::vector<double>& v){
     if (v.empty()) return 0.0;
@@ -19,6 +20,7 @@ static inline double stdev(const std::vector<double>& v, double m){
 void Benchmark::run_scaling(Network& net, int steps, ScheduleType st, int chunk,
                             SyncMethod sm, const std::vector<int>& threads_list,
                             int reps, const std::string& out_scaling_path) {
+    std::filesystem::create_directories("results");
     std::ofstream fout(out_scaling_path);
     if (fout) fout << "# p  mean_T  std_T  S  std_S  E  std_E\n";
     double T1=0.0, T1s=0.0;
@@ -58,6 +60,7 @@ void Benchmark::run_schedule_chunk(Network& net, int steps, SyncMethod sm,
                                    const std::vector<ScheduleType>& sts,
                                    const std::vector<int>& chunks,
                                    int threads, int reps, const std::string& out_path){
+    std::filesystem::create_directories("results");
     std::ofstream f(out_path);
     if (f) f << "# schedule chunk mean_T std_T\n";
     omp_set_num_threads(threads);
@@ -77,6 +80,7 @@ void Benchmark::run_schedule_chunk(Network& net, int steps, SyncMethod sm,
 }
 void Benchmark::run_sync_methods(Network& net, int steps, ScheduleType st, int chunk,
                                  int threads, int reps, const std::string& out_path){
+    std::filesystem::create_directories("results");
     std::ofstream f(out_path);
     if (f) f << "# method mean_T std_T\n";
     omp_set_num_threads(threads);
@@ -97,6 +101,7 @@ void Benchmark::run_sync_methods(Network& net, int steps, ScheduleType st, int c
 void Benchmark::run_tasks_vs_for(Network& net, int steps, ScheduleType st, int chunk,
                                  SyncMethod sm, int threads, int reps, int grain,
                                  const std::string& out_path){
+    std::filesystem::create_directories("results");
     std::ofstream f(out_path);
     if (f) f << "# mode mean_T std_T\n";
     omp_set_num_threads(threads);

@@ -1,6 +1,7 @@
 #include "WavePropagator.h"
 #include <omp.h>
 #include <fstream>
+#include <filesystem>
 
 void WavePropagator::step_schedule(ScheduleType st, int chunk) {
     auto& nodes = net_->data();
@@ -166,10 +167,12 @@ void WavePropagator::demo_data_clauses(const char* out_path){
         captured_last = a;
     }
     lastprivate_val_ = captured_last;
+    std::filesystem::create_directories("results");
     std::ofstream f(out_path);
     if (f) f << "# lastprivate_val\n" << lastprivate_val_ << "\n";
 }
 void WavePropagator::run(int steps, ScheduleType st, int chunk, SyncMethod sm, const char* energy_trace_path) {
+    std::filesystem::create_directories("results");
     std::ofstream fout(energy_trace_path);
     if (fout) fout << "# t E(t)\n";
     for (int t=0; t<steps; ++t) {
@@ -183,6 +186,7 @@ void WavePropagator::run(int steps, ScheduleType st, int chunk, SyncMethod sm, c
     }
 }
 void WavePropagator::process_with_tasks(int steps, int grain, SyncMethod sm, const char* energy_trace_path){
+    std::filesystem::create_directories("results");
     std::ofstream fout(energy_trace_path);
     if (fout) fout << "# t E(t)\n";
     auto& nodes = net_->data();

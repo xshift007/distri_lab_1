@@ -13,9 +13,11 @@ clean:
 	rm -f $(TARGET) *.o results/*.dat results/*.png
 
 benchmark: $(TARGET)
+	mkdir -p results
 	./$(TARGET) --benchmark --threads 1,2,4,8
 
 analysis: $(TARGET)
+	mkdir -p results
 	python3 scripts/plot_speedup.py && python3 scripts/plot_benchmarks.py
 
 .PHONY: clean benchmark analysis

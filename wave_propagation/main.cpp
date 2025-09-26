@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <omp.h>
+#include <filesystem>
 
 #include "Network.h"
 #include "WavePropagator.h"
@@ -92,6 +93,7 @@ static std::vector<int> parse_threads_csv(const std::string& s){
 }
 
 int main(int argc, char** argv){
+    std::filesystem::create_directories("results");
     Args args = parse_args(argc, argv);
 
     Network net(/*N*/args.N, /*D*/args.D, /*gamma*/args.gamma);
