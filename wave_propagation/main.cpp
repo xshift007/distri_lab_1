@@ -1,71 +1,44 @@
 #include <iostream>
-#include <fstream>
 #include <string>
 #include <vector>
 #include <cstdlib>
-#include <cstring>
-#include <omp.h>
 #include <filesystem>
+#include <omp.h>
 
+#include "Types.h"
 #include "Network.h"
 #include "WavePropagator.h"
 #include "Benchmark.h"
 
 struct Args {
-    std::string network = "2d";
-    int N = 10000;
-    int Lx = 100, Ly = 100;
+    std::string network = "2d"; // {1d,2d}
+    int N = 10000;              // 1d
+    int Lx = 100, Ly = 100;     // 2d
     double D = 0.1, gamma = 0.01, dt = 0.01;
     int steps = 200;
     double S0 = 0.0, omega = 0.0;
-    std::string schedule = "dynamic";
+
+    std::string schedule = "dynamic"; // {static,dynamic,guided}
     int chunk = 32;
-    std::string sync = "reduction";
-    std::string threads_csv = "";
+    bool chunk_auto = false;
+
+    std::string threads_csv = "";   // para ejecución simple
     bool do_bench = false;
-    bool do_analysis = false;
-    bool demo_data = true;
+
+    // Mínimo: solo fused (menos barreras)
+    bool fused = true;
 };
 
 static void usage(){
     std::cout << "Uso: ./wave_propagation [opciones]\n"
-              << "  --network {1d,2d,random,smallworld}\n"
+              << "  --network {1d,2d}\n"
               << "  --N 10000 | --Lx 100 --Ly 100\n"
               << "  --D 0.1 --gamma 0.01 --dt 0.01 --steps 200\n"
               << "  --S0 0.1 --omega 0.5\n"
-              << "  --schedule {static,dynamic,guided} --chunk 32\n"
-              << "  --sync {reduction,atomic,critical}\n"
-              << "  --threads 1,2,4,8,16\n"
-              << "  --benchmark | --analysis\n";
-}
-
-static bool parse_int(const char* s, int& out){ char* e=nullptr; long v=strtol(s,&e,10); if(!e||*e) return false; out=(int)v; return true; }
-static bool parse_double(const char* s, double& out){ char* e=nullptr; double v=strtod(s,&e); if(!e) return false; out=v; return true; }
-
-static Args parse_args(int argc, char** argv){
-    Args a;
-    for (int i=1;i<argc;++i){
-        std::string k = argv[i];
-        auto need = [&](int i){ if (i+1>=argc) { usage(); std::exit(1);} };
-        if (k=="--network"){ need(i); a.network=argv[++i]; }
-        else if (k=="--N"){ need(i); parse_int(argv[++i], a.N); }
-        else if (k=="--Lx"){ need(i); parse_int(argv[++i], a.Lx); }
-        else if (k=="--Ly"){ need(i); parse_int(argv[++i], a.Ly); }
-        else if (k=="--D"){ need(i); parse_double(argv[++i], a.D); }
-        else if (k=="--gamma"){ need(i); parse_double(argv[++i], a.gamma); }
-        else if (k=="--dt"){ need(i); parse_double(argv[++i], a.dt); }
-        else if (k=="--steps"){ need(i); parse_int(argv[++i], a.steps); }
-        else if (k=="--S0"){ need(i); parse_double(argv[++i], a.S0); }
-        else if (k=="--omega"){ need(i); parse_double(argv[++i], a.omega); }
-        else if (k=="--schedule"){ need(i); a.schedule=argv[++i]; }
-        else if (k=="--chunk"){ need(i); parse_int(argv[++i], a.chunk); }
-        else if (k=="--sync"){ need(i); a.sync=argv[++i]; }
-        else if (k=="--threads"){ need(i); a.threads_csv=argv[++i]; }
-        else if (k=="--benchmark"){ a.do_bench = true; }
-        else if (k=="--analysis"){ a.do_analysis = true; }
-        else { std::cerr << "Opción desconocida: " << k << "\n"; usage(); std::exit(1); }
-    }
-    return a;
+              << "  --schedule {static,dynamic,guided}\n"
+              << "  --chunk <n|auto>\n"
+              << "  --threads <n>\n"
+              << "  --benchmark\n";
 }
 
 static ScheduleType parse_schedule(const std::string& s){
@@ -73,66 +46,92 @@ static ScheduleType parse_schedule(const std::string& s){
     if (s=="dynamic") return ScheduleType::Dynamic;
     return ScheduleType::Guided;
 }
-static SyncMethod parse_sync(const std::string& s){
-    if (s=="reduction") return SyncMethod::Reduction;
-    if (s=="atomic")    return SyncMethod::Atomic;
-    return SyncMethod::Critical;
-}
-static std::vector<int> parse_threads_csv(const std::string& s){
-    std::vector<int> out;
-    if (s.empty()) return out;
-    size_t start=0;
-    while (start < s.size()){
-        size_t comma = s.find(',', start);
-        std::string tok = s.substr(start, (comma==std::string::npos)? std::string::npos : comma-start);
-        if (!tok.empty()) out.push_back(std::atoi(tok.c_str()));
-        if (comma==std::string::npos) break;
-        start = comma+1;
+
+static int parse_int(const char* s){ return std::atoi(s); }
+static double parse_double(const char* s){ return std::atof(s); }
+
+static Args parse_args(int argc, char** argv){
+    Args a;
+    for (int i=1;i<argc;++i){
+        std::string k = argv[i];
+        auto need = [&](int idx){ if (idx+1>=argc) { usage(); std::exit(1);} };
+        if (k=="--network"){ need(i); a.network=argv[++i]; }
+        else if (k=="--N"){ need(i); a.N=parse_int(argv[++i]); }
+        else if (k=="--Lx"){ need(i); a.Lx=parse_int(argv[++i]); }
+        else if (k=="--Ly"){ need(i); a.Ly=parse_int(argv[++i]); }
+        else if (k=="--D"){ need(i); a.D=parse_double(argv[++i]); }
+        else if (k=="--gamma"){ need(i); a.gamma=parse_double(argv[++i]); }
+        else if (k=="--dt"){ need(i); a.dt=parse_double(argv[++i]); }
+        else if (k=="--steps"){ need(i); a.steps=parse_int(argv[++i]); }
+        else if (k=="--S0"){ need(i); a.S0=parse_double(argv[++i]); }
+        else if (k=="--omega"){ need(i); a.omega=parse_double(argv[++i]); }
+        else if (k=="--schedule"){ need(i); a.schedule=argv[++i]; }
+        else if (k=="--chunk"){
+            need(i);
+            std::string v = argv[++i];
+            if (v=="auto") a.chunk_auto = true;
+            else a.chunk = std::atoi(v.c_str());
+        }
+        else if (k=="--threads"){ need(i); a.threads_csv=argv[++i]; }
+        else if (k=="--benchmark"){ a.do_bench = true; }
+        else if (k=="--help" || k=="-h"){ usage(); std::exit(0); }
+        else { std::cerr << "Opcion desconocida: " << k << "\n"; usage(); std::exit(1); }
     }
-    return out;
+    return a;
 }
+
+static int compute_auto_chunk(int N, ScheduleType st, int p){
+    if (N<=0) return 64;
+    if (st==ScheduleType::Dynamic) return 256;
+    if (st==ScheduleType::Guided)  return 64;
+    int c = std::max(64, N/std::max(1,p*8));
+    c = (c/8)*8;
+    return std::min(std::max(c,64),8192);
+}
+
 
 int main(int argc, char** argv){
     std::filesystem::create_directories("results");
     Args args = parse_args(argc, argv);
 
-    Network net(/*N*/args.N, /*D*/args.D, /*gamma*/args.gamma);
-    if (args.network == "1d")       net.makeRegular1D(false);
-    else if (args.network == "2d")  net.makeRegular2D(args.Lx, args.Ly, false);
-    else if (args.network == "random"){ net.makeRegular1D(false); net.makeRandom(10.0); }
-    else if (args.network == "smallworld"){ net.makeSmallWorld(2, 0.05); }
-    else { std::cerr << "Tipo de red no reconocido, usando 2d por defecto.\n"; net.makeRegular2D(args.Lx, args.Ly, false); }
-    net.setAll(0.0); net.setInitialImpulseCenter(1.0);
-
     ScheduleType st = parse_schedule(args.schedule);
-    SyncMethod sm    = parse_sync(args.sync);
 
-    if (args.do_bench) {
-        std::vector<int> plist = parse_threads_csv(args.threads_csv);
-        if (plist.empty()) plist = {1,2,4,8};
-        Benchmark::run_scaling(net, args.steps, st, args.chunk, sm, plist, /*reps*/5, "results/scaling.dat");
-        Benchmark::run_schedule_chunk(net, args.steps, sm,
-            {ScheduleType::Static, ScheduleType::Dynamic, ScheduleType::Guided},
-            {1,8,32,64,256}, /*threads*/8, /*reps*/5, "results/schedule_vs_chunk.dat");
-        Benchmark::run_sync_methods(net, args.steps, st, args.chunk, /*threads*/8, /*reps*/5, "results/sync_methods.dat");
-        Benchmark::run_tasks_vs_for(net, args.steps, st, args.chunk, sm, /*threads*/8, /*reps*/5, /*grain*/500, "results/tasks_vs_for.dat");
-        // Con I/O para comparar (Amdahl con escritura de archivo)
-        Benchmark::run_scaling_io(net, args.steps, st, args.chunk, sm, plist, /*reps*/5, "results/scaling_io.dat");
-        // Barrido de granularidad de tasks
-        Benchmark::run_tasks_grain_sweep(net, args.steps, sm, /*threads*/8, /*reps*/5,
-            std::vector<int>{128,256,512,1024,4096}, "results/tasks_grain.dat");
+    // Construcción de red (solo 1D/2D)
+    Network net = (args.network=="1d")
+        ? Network(args.N, args.D, args.gamma)
+        : Network(args.Lx, args.Ly, args.D, args.gamma);
+    if (args.network=="1d") net.makeRegular1D(false);
+    else                    net.makeRegular2D(false);
 
-        std::cout << "Benchmarks listos. Revisa carpeta results/ y usa scripts/plot_speedup.py y scripts/plot_benchmarks.py\n";
-        return 0;
-    }
+    // Estado inicial
+    net.setAll(0.0);
+    net.setInitialImpulseCenter(1.0);
 
     if (!args.threads_csv.empty()) {
         int t = std::atoi(args.threads_csv.c_str());
         if (t>0) omp_set_num_threads(t);
     }
+
+    // Heurística de chunk auto
+    if (args.chunk_auto) {
+        int p = omp_get_max_threads();
+        args.chunk = compute_auto_chunk(net.size(), st, p);
+        std::cout << "[auto-chunk] " << args.chunk << "\n";
+    }
+
+    if (args.do_bench){
+        // Scaling y tiempo vs chunk (dynamic)
+        std::vector<int> plist = {1,2,4,8};
+        Benchmark::run_scaling(net, args.steps, st, args.chunk, plist, /*reps*/10, "results/scaling.dat");
+        Benchmark::run_time_vs_chunk_dynamic(net, args.steps, /*threads*/8, /*reps*/10,
+                                             std::vector<int>{64,128,256,512}, "results/time_vs_chunk_dynamic.dat");
+        std::cout << "Benchmarks listos. Revisa carpeta results/\n";
+        return 0;
+    }
+
+    // Ejecucion normal
     WavePropagator wp(&net, args.dt, args.S0, args.omega);
-    wp.demo_data_clauses("results/datascope_demo.dat");
-    wp.run(args.steps, st, args.chunk, sm, "results/energy_trace.dat");
-    std::cout << "Ejecución finalizada. Salidas en results/\n";
+    wp.run_fused(args.steps, st, args.chunk, "results/energy_trace.dat");
+    std::cout << "OK. Resultados en results/\n";
     return 0;
 }

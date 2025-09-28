@@ -1,46 +1,47 @@
-import numpy as np, matplotlib.pyplot as plt
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+os.makedirs("results", exist_ok=True)
+
 def load_scaling(path='results/scaling.dat'):
     try:
-        d = np.loadtxt(path)
-        if d.ndim == 1: d = d.reshape(1, -1)
+        d = np.loadtxt(path, dtype=float, comments="#")
+        if d.ndim == 1:
+            d = d.reshape(1, -1)
         return d
     except Exception as e:
-        print("No se pudo leer", path, "->", e); return None
-def plot_speedup(d):
-    p, S = d[:,0], d[:,3]
-    plt.figure(); plt.plot(p, S, marker='o', label='Medido')
-    plt.plot(p, p, linestyle='--', label='Ideal')
-    plt.xlabel('Threads (p)'); plt.ylabel('Speedup S_p')
-    plt.title('Speedup vs Threads'); plt.grid(True); plt.legend()
-    plt.savefig('results/speedup_vs_threads.png', dpi=200, bbox_inches='tight')
-def plot_efficiency(d):
-    p, E = d[:,0], d[:,5]
-    plt.figure(); plt.plot(p, E, marker='s', label='Eficiencia')
-    plt.xlabel('Threads (p)'); plt.ylabel('Eficiencia E_p')
-    plt.title('Eficiencia vs Threads'); plt.grid(True); plt.legend()
-    plt.savefig('results/efficiency_vs_threads.png', dpi=200, bbox_inches='tight')
-def load_scaling_io(path='results/scaling_io.dat'):
-    try:
-        d = np.loadtxt(path)
-        if d.ndim == 1: d = d.reshape(1, -1)
-        return d
-    except Exception as e:
+        print("No se pudo leer", path, "->", e)
         return None
-
-def plot_speedup_io(d):
-    p, S = d[:,0], d[:,3]
-    plt.figure(); plt.plot(p, S, marker='o', label='Medido (con I/O)')
-    plt.plot(p, p, linestyle='--', label='Ideal')
-    plt.xlabel('Threads (p)'); plt.ylabel('Speedup S_p')
-    plt.title('Speedup vs Threads (con I/O)'); plt.grid(True); plt.legend()
-    plt.savefig('results/speedup_vs_threads_io.png', dpi=200, bbox_inches='tight')
 
 def main():
     d = load_scaling()
-    if d is None: print("Genera results/scaling.dat con `make benchmark`."); return
-    plot_speedup(d); plot_efficiency(d);
-    d_io = load_scaling_io();
-    if d_io is not None:
-        plot_speedup_io(d_io)
-    print("Listo: results/*.png")
-if __name__=='__main__': main()
+    if d is None or d.shape[1] < 3:
+        print("Archivo inválido o vacío.")
+        return
+    p = d[:,0].astype(int)
+    T = d[:,1].astype(float)
+    sT= d[:,2].astype(float)
+
+    T1 = T[p==1][0] if np.any(p==1) else T[0]
+    S  = T1 / T
+    E  = S / p
+
+    # Speedup
+    plt.figure()
+    plt.errorbar(p, S, yerr=np.zeros_like(S), marker='o')
+    plt.xlabel('Threads p'); plt.ylabel('Speedup S_p')
+    plt.title('Speedup vs Threads'); plt.grid(True)
+    plt.savefig('results/speedup.png', dpi=200, bbox_inches='tight')
+
+    # Eficiencia
+    plt.figure()
+    plt.errorbar(p, E, yerr=np.zeros_like(E), marker='o')
+    plt.xlabel('Threads p'); plt.ylabel('Eficiencia E_p')
+    plt.title('Eficiencia vs Threads'); plt.grid(True)
+    plt.savefig('results/efficiency.png', dpi=200, bbox_inches='tight')
+
+    print("Listo: results/speedup.png, results/efficiency.png")
+
+if __name__ == "__main__":
+    main()

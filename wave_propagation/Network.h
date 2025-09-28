@@ -1,30 +1,33 @@
 #pragma once
 #include <vector>
-#include <random>
+#include <cassert>
 #include "Node.h"
 
 class Network {
     std::vector<Node> nodes_;
-    int N_ = 0;
+    bool is2d_ = false;
     int Lx_ = 0, Ly_ = 0;
-    double D_ = 0.1, gamma_ = 0.01;
-    bool is2D_ = false;
+    double D_ = 0.1, g_ = 0.01; // diffusion, damping
+
 public:
-    Network() = default;
-    Network(int N, double D, double gamma);
-    void clear();
-    void makeRegular1D(bool periodic = false);
-    void makeRegular2D(int Lx, int Ly, bool periodic = false);
-    void makeRandom(double mean_degree);
-    void makeSmallWorld(int k, double beta);
-    void setInitialImpulseCenter(double A0);
-    void setAll(double A);
-    std::vector<Node>& data() { return nodes_; }
-    const std::vector<Node>& data() const { return nodes_; }
-    int size() const { return N_; }
+    Network(int N, double D, double g);
+    Network(int Lx, int Ly, double D, double g);
+
+    // Build topologies
+    void makeRegular1D(bool periodic=false);
+    void makeRegular2D(bool periodic=false);
+
+    // State ops
+    void setAll(double v);
+    void setInitialImpulseCenter(double amp);
+
+    // Accessors
+    int size() const { return (int)nodes_.size(); }
+    bool is2D() const { return is2d_; }
     int Lx() const { return Lx_; }
     int Ly() const { return Ly_; }
     double diffusion() const { return D_; }
-    double damping() const { return gamma_; }
-    bool is2D() const { return is2D_; }
+    double damping() const { return g_; }
+    std::vector<Node>& data(){ return nodes_; }
+    const std::vector<Node>& data() const { return nodes_; }
 };

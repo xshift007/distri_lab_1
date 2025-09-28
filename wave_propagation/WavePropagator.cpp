@@ -2,233 +2,81 @@
 #include <omp.h>
 #include <fstream>
 #include <filesystem>
+#include <vector>
+#include <cmath>
 
-void WavePropagator::step_schedule(ScheduleType st, int chunk) {
+void WavePropagator::run_fused(int steps, ScheduleType st, int chunk, const std::string& energy_out){
     auto& nodes = net_->data();
     const int N = net_->size();
     const double D = net_->diffusion();
     const double g = net_->damping();
-    double s_val = 0.0;
-    #pragma omp parallel
+
+    std::vector<std::pair<int,double>> trace;
+    trace.reserve(steps);
+
+    const double dt = dt_;
+    double local_t = tcur_;
+    double E_global = 0.0;
+
+    #pragma omp parallel default(none) \
+        shared(nodes, N, D, g, st, chunk, steps, dt, local_t, S0_, omega_, E_global, trace)
     {
-        #pragma omp single
-        { s_val = (omega_!=0.0) ? (S0_ * std::sin(omega_*tcur_)) : S0_; }
-        if (net_->is2D()) {
-            const int Lx = net_->Lx();
-            const int Ly = net_->Ly();
-            if (st == ScheduleType::Static) {
-                #pragma omp for collapse(2) schedule(static,chunk) nowait
-                for (int y=0; y<Ly; ++y)
-                    for (int x=0; x<Lx; ++x) {
-                        int i = y*Lx + x;
-                        double ai = nodes[i].getPrev();
-                        double acc = 0.0;
-                        const auto& nbrs = nodes[i].neighbors();
-                        for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                        double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                        nodes[i].setAmplitude(next);
-                    }
-            } else if (st == ScheduleType::Dynamic) {
-                #pragma omp for collapse(2) schedule(dynamic,chunk) nowait
-                for (int y=0; y<Ly; ++y)
-                    for (int x=0; x<Lx; ++x) {
-                        int i = y*Lx + x;
-                        double ai = nodes[i].getPrev();
-                        double acc = 0.0;
-                        const auto& nbrs = nodes[i].neighbors();
-                        for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                        double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                        nodes[i].setAmplitude(next);
-                    }
-            } else {
-                #pragma omp for collapse(2) schedule(guided,chunk) nowait
-                for (int y=0; y<Ly; ++y)
-                    for (int x=0; x<Lx; ++x) {
-                        int i = y*Lx + x;
-                        double ai = nodes[i].getPrev();
-                        double acc = 0.0;
-                        const auto& nbrs = nodes[i].neighbors();
-                        for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                        double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                        nodes[i].setAmplitude(next);
-                    }
-            }
-        } else {
-            if (st == ScheduleType::Static) {
-                #pragma omp for schedule(static,chunk) nowait
-                for (int i=0; i<N; ++i) {
+        for (int it=0; it<steps; ++it){
+            double s_val = 0.0;
+            #pragma omp single
+            { s_val = (omega_!=0.0) ? (S0_*std::sin(omega_*local_t)) : S0_; E_global = 0.0; }
+
+            // Update (leer prev, escribir actual)
+            if (st == ScheduleType::Static){
+                #pragma omp for schedule(static,chunk)
+                for (int i=0;i<N;++i){
                     double ai = nodes[i].getPrev();
-                    double acc = 0.0;
-                    const auto& nbrs = nodes[i].neighbors();
-                    for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                    double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                    nodes[i].setAmplitude(next);
+                    const auto& nb = nodes[i].neighbors();
+                    double acc=0.0; for (int j: nb) acc += (nodes[j].getPrev() - ai);
+                    nodes[i].set( ai + dt*(D*acc - g*ai + s_val) );
                 }
-            } else if (st == ScheduleType::Dynamic) {
-                #pragma omp for schedule(dynamic,chunk) nowait
-                for (int i=0; i<N; ++i) {
+            } else if (st == ScheduleType::Dynamic){
+                #pragma omp for schedule(dynamic,chunk)
+                for (int i=0;i<N;++i){
                     double ai = nodes[i].getPrev();
-                    double acc = 0.0;
-                    const auto& nbrs = nodes[i].neighbors();
-                    for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                    double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                    nodes[i].setAmplitude(next);
+                    const auto& nb = nodes[i].neighbors();
+                    double acc=0.0; for (int j: nb) acc += (nodes[j].getPrev() - ai);
+                    nodes[i].set( ai + dt*(D*acc - g*ai + s_val) );
                 }
-            } else {
-                #pragma omp for schedule(guided,chunk) nowait
-                for (int i=0; i<N; ++i) {
+            } else { // Guided
+                #pragma omp for schedule(guided,chunk)
+                for (int i=0;i<N;++i){
                     double ai = nodes[i].getPrev();
-                    double acc = 0.0;
-                    const auto& nbrs = nodes[i].neighbors();
-                    for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                    double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                    nodes[i].setAmplitude(next);
+                    const auto& nb = nodes[i].neighbors();
+                    double acc=0.0; for (int j: nb) acc += (nodes[j].getPrev() - ai);
+                    nodes[i].set( ai + dt*(D*acc - g*ai + s_val) );
                 }
             }
+
+            // Energía y commit en paralelo
+            #pragma omp for reduction(+:E_global) nowait
+            for (int i=0;i<N;++i){
+                double a = nodes[i].get();
+                E_global += a*a;
+            }
+            #pragma omp for nowait
+            for (int i=0;i<N;++i) nodes[i].commit();
+
+            #pragma omp single
+            { trace.emplace_back(it+1, E_global); local_t += dt; }
+
+            #pragma omp barrier
         }
-        #pragma omp barrier
     }
-    tcur_ += dt_;
-}
-void WavePropagator::energy_reduction(double& E) {
-    E = 0.0;
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    #pragma omp parallel for reduction(+:E)
-    for (int i=0;i<N;++i) {
-        double a = nodes[i].get();
-        E += a*a;
-    }
-}
-void WavePropagator::energy_atomic(double& E) {
-    E = 0.0;
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    #pragma omp parallel
-    {
-        double local = 0.0;
-        #pragma omp for nowait
-        for (int i=0;i<N;++i) {
-            double a = nodes[i].get();
-            local += a*a;
-        }
-        #pragma omp atomic
-        E += local;
-    }
-}
-void WavePropagator::energy_critical(double& E) {
-    E = 0.0;
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    #pragma omp parallel
-    {
-        double local = 0.0;
-        #pragma omp for nowait
-        for (int i=0;i<N;++i) {
-            double a = nodes[i].get();
-            local += a*a;
-        }
-        #pragma omp critical
-        { E += local; }
-    }
-}
-void WavePropagator::commit_with_barrier() {
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    #pragma omp parallel
-    {
-        #pragma omp for
-        for (int i=0;i<N;++i) {
-            nodes[i].commit();
-        }
-        #pragma omp barrier
-    }
-}
-void WavePropagator::commit_with_nowait_example() {
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    #pragma omp parallel
-    {
-        #pragma omp for nowait
-        for (int i=0;i<N;++i) {
-            nodes[i].commit();
-        }
-        #pragma omp barrier
-    }
-}
-void WavePropagator::demo_data_clauses(const char* out_path){
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    double s_const = (omega_!=0.0) ? (S0_ * std::sin(omega_*tcur_)) : S0_;
-    double captured_last = 0.0;
-    #pragma omp parallel for default(none) shared(nodes,N) firstprivate(s_const) lastprivate(captured_last)
-    for (int i=0;i<N;++i){
-        double a = nodes[i].getPrev() + s_const;
-        captured_last = a;
-    }
-    lastprivate_val_ = captured_last;
-    std::filesystem::create_directories("results");
-    std::ofstream f(out_path);
-    if (f) f << "# lastprivate_val\n" << lastprivate_val_ << "\n";
-}
-void WavePropagator::run(int steps, ScheduleType st, int chunk, SyncMethod sm, const char* energy_trace_path) {
-    std::filesystem::create_directories("results");
-    std::ofstream fout;
-    bool write = (energy_trace_path && energy_trace_path[0] != '\0');
-    if (write) {
+
+    // Dump energía (fuera del paralelo)
+    if (!energy_out.empty()){
         std::filesystem::create_directories("results");
-        fout.open(energy_trace_path);
-        if (fout) fout << "# t E(t)\n";
-    }
-    for (int t=0; t<steps; ++t) {
-        step_schedule(st, chunk);
-        commit_with_barrier();
-        double E = 0.0;
-        if (sm == SyncMethod::Reduction) energy_reduction(E);
-        else if (sm == SyncMethod::Atomic) energy_atomic(E);
-        else energy_critical(E);
-        if (write && fout) fout << (t+1) << " " << E << "\n";
-    }
-}
-void WavePropagator::process_with_tasks(int steps, int grain, SyncMethod sm, const char* energy_trace_path){
-    std::filesystem::create_directories("results");
-    std::ofstream fout;
-    bool write = (energy_trace_path && energy_trace_path[0] != '\0');
-    if (write) {
-        std::filesystem::create_directories("results");
-        fout.open(energy_trace_path);
-        if (fout) fout << "# t E(t)\n";
-    }
-    auto& nodes = net_->data();
-    const int N = net_->size();
-    const double D = net_->diffusion();
-    const double g = net_->damping();
-    for (int it=0; it<steps; ++it){
-        double s_val = (omega_!=0.0) ? (S0_ * std::sin(omega_*tcur_)) : S0_;
-        #pragma omp parallel
-        #pragma omp single
-        {
-            for (int b=0; b<N; b+=grain){
-                int start=b, end = (b+grain < N) ? (b+grain) : N;
-                #pragma omp task firstprivate(start,end,s_val)
-                {
-                    for (int i=start;i<end;++i){
-                        double ai = nodes[i].getPrev();
-                        double acc = 0.0;
-                        const auto& nbrs = nodes[i].neighbors();
-                        for (int j : nbrs) acc += nodes[j].getPrev() - ai;
-                        double next = ai + dt_ * ( D*acc - g*ai + s_val );
-                        nodes[i].setAmplitude(next);
-                    }
-                }
-            }
+        std::ofstream f(energy_out);
+        if (f){
+            f << "# step E\n";
+            for (auto &kv : trace) f << kv.first << " " << kv.second << "\n";
         }
-        commit_with_barrier();
-        double E = 0.0;
-        if (sm == SyncMethod::Reduction) energy_reduction(E);
-        else if (sm == SyncMethod::Atomic) energy_atomic(E);
-        else energy_critical(E);
-        if (write && fout) fout << (it+1) << " " << E << "\n";
-        tcur_ += dt_;
     }
+    tcur_ = local_t;
 }

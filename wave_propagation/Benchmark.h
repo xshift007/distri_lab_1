@@ -1,28 +1,19 @@
 #pragma once
-#include "WavePropagator.h"
 #include <string>
 #include <vector>
-class Benchmark {
-public:
-    static void run_scaling(Network& net, int steps, ScheduleType st, int chunk,
-                            SyncMethod sm, const std::vector<int>& threads_list,
-                            int reps, const std::string& out_scaling_path);
-    static void run_schedule_chunk(Network& net, int steps, SyncMethod sm,
-                                   const std::vector<ScheduleType>& sts,
-                                   const std::vector<int>& chunks,
-                                   int threads, int reps, const std::string& out_path);
-    static void run_sync_methods(Network& net, int steps, ScheduleType st, int chunk,
-                                 int threads, int reps, const std::string& out_path);
-    static void run_tasks_vs_for(Network& net, int steps, ScheduleType st, int chunk,
-                                 SyncMethod sm, int threads, int reps, int grain,
-                                 const std::string& out_path);
+#include "Types.h"
+#include "Network.h"
+#include "WavePropagator.h"
 
-    static void run_scaling_io(Network& net, int steps, ScheduleType st, int chunk,
-                               SyncMethod sm, const std::vector<int>& threads_list,
-                               int reps, const std::string& out_scaling_path);
+namespace Benchmark {
 
-    static void run_tasks_grain_sweep(Network& net, int steps, SyncMethod sm,
-                                      int threads, int reps,
-                                      const std::vector<int>& grains,
-                                      const std::string& out_path);
-};
+// Repite y promedia tiempos para scaling (p = #threads)
+void run_scaling(Network& net, int steps, ScheduleType st, int chunk,
+                 const std::vector<int>& threads_list, int reps,
+                 const std::string& out_path);
+
+// Barrido de chunk para schedule = dynamic (tiempo vs chunk)
+void run_time_vs_chunk_dynamic(Network& net, int steps, int threads, int reps,
+                               const std::vector<int>& chunks,
+                               const std::string& out_path);
+}

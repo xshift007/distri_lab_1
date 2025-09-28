@@ -1,19 +1,22 @@
 #pragma once
 #include <vector>
+
 class Node {
     int id_;
-    double amp_;
-    double amp_prev_;
+    double a_;      // current amplitude
+    double a_prev_; // previous amplitude (double buffer)
     std::vector<int> nbrs_;
 public:
-    explicit Node(int id = 0) : id_(id), amp_(0.0), amp_prev_(0.0) {}
-    void addNeighbor(int j) { for(int x: nbrs_) if (x==j) return; nbrs_.push_back(j); }
-    void setAmplitude(double a) { amp_ = a; }
-    void setPrev(double a)      { amp_prev_ = a; }
-    void commit() { amp_prev_ = amp_; }
-    double get() const     { return amp_; }
-    double getPrev() const { return amp_prev_; }
+    explicit Node(int id=0) : id_(id), a_(0.0), a_prev_(0.0) {}
+
+    void addNeighbor(int j){ nbrs_.push_back(j); }
     const std::vector<int>& neighbors() const { return nbrs_; }
-    int degree() const { return (int)nbrs_.size(); }
-    int id() const { return id_; }
+
+    void set(double v){ a_ = v; }
+    void setPrev(double v){ a_prev_ = v; }
+
+    double get() const { return a_; }
+    double getPrev() const { return a_prev_; }
+
+    void commit(){ a_prev_ = a_; } // new -> prev for next step
 };
