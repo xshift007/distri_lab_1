@@ -18,11 +18,11 @@ void WavePropagator::run_fused(int steps, ScheduleType st, int chunk, const std:
     double local_t = tcur_;
     double E_global = 0.0;
 
+    double s_val = 0.0;
     #pragma omp parallel default(none) \
-        shared(nodes, N, D, g, st, chunk, steps, dt, local_t, S0_, omega_, E_global, trace)
+        shared(nodes, N, D, g, st, chunk, steps, dt, local_t, S0_, omega_, E_global, trace, s_val)
     {
         for (int it=0; it<steps; ++it){
-            double s_val = 0.0;
             #pragma omp single
             { s_val = (omega_!=0.0) ? (S0_*std::sin(omega_*local_t)) : S0_; E_global = 0.0; }
 
