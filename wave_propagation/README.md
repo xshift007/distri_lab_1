@@ -27,6 +27,7 @@ python3 scripts/plot_chunk.py
 ```
 Genera:
 - `results/scaling.dat` → `speedup.png` y `efficiency.png`
+  - Formato: `threads mean_time std_time speedup speedup_err efficiency efficiency_err`
 - `results/time_vs_chunk_dynamic.dat` → `time_vs_chunk_dynamic.png`
 
 ## Parámetros recomendados

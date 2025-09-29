@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <numeric>
 #include <cmath>
+#include <algorithm>
 
 static double mean(const std::vector<double>& v){
     if (v.empty()) return 0.0;
@@ -26,10 +27,16 @@ void Benchmark::run_scaling(Network& net, int steps, ScheduleType st, int chunk,
     std::filesystem::create_directories("results");
     std::ofstream out(out_path);
     if (!out) return;
-    out << "# threads mean_time std_time\n";
 
-    for (int p: threads_list){
+    struct Sample {
+        int threads;
+        double mean;
+        double stdev;
+    };
+
+    auto measure = [&](int p){
         std::vector<double> times;
+        times.reserve(reps);
         for (int r=0;r<reps;++r){
             reset_initial(net);
             omp_set_num_threads(p);
@@ -39,7 +46,68 @@ void Benchmark::run_scaling(Network& net, int steps, ScheduleType st, int chunk,
             double t1 = omp_get_wtime();
             times.push_back(t1-t0);
         }
-        out << p << " " << mean(times) << " " << stdev(times) << "\n";
+        return Sample{p, mean(times), stdev(times)};
+    };
+
+    std::vector<Sample> results;
+    results.reserve(threads_list.size()+1);
+    bool has_base=false;
+    Sample base{1,0.0,0.0};
+
+    for (int p: threads_list){
+        Sample s = measure(p);
+        if (p==1){
+            has_base = true;
+            base = s;
+        }
+        results.push_back(s);
+    }
+
+    if (!has_base){
+        base = measure(1);
+        results.push_back(base);
+    }
+
+    std::sort(results.begin(), results.end(), [](const Sample& a, const Sample& b){
+        return a.threads < b.threads;
+    });
+
+    const double base_mean = base.mean;
+    const double base_stdev = base.stdev;
+
+    out << "# threads mean_time std_time speedup speedup_err efficiency efficiency_err\n";
+
+    for (const auto& s: results){
+        double speedup = 0.0;
+        double speedup_err = 0.0;
+        if (s.mean > 0.0 && base_mean > 0.0){
+            speedup = base_mean / s.mean;
+            if (s.threads == 1){
+                speedup = 1.0;
+                speedup_err = 0.0;
+            } else {
+                double term1 = base_stdev / s.mean;
+                double term2 = 0.0;
+                double denom = s.mean * s.mean;
+                if (denom > 0.0){
+                    term2 = (base_mean * s.stdev) / denom;
+                }
+                double variance = term1*term1 + term2*term2;
+                if (variance > 0.0){
+                    speedup_err = std::sqrt(variance);
+                }
+            }
+        }
+        double efficiency = (s.threads > 0) ? speedup / s.threads : 0.0;
+        double efficiency_err = (s.threads > 0) ? speedup_err / s.threads : 0.0;
+
+        out << s.threads << " "
+            << s.mean << " "
+            << s.stdev << " "
+            << speedup << " "
+            << speedup_err << " "
+            << efficiency << " "
+            << efficiency_err << "\n";
     }
 }
 
