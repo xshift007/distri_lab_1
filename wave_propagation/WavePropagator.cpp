@@ -62,10 +62,10 @@ void WavePropagator::run_fused(int steps, ScheduleType st, int chunk, const std:
             #pragma omp for nowait
             for (int i=0;i<N;++i) nodes[i].commit();
 
+            #pragma omp barrier
+
             #pragma omp single
             { trace.emplace_back(it+1, E_global); local_t += dt; }
-
-            #pragma omp barrier
         }
     }
 
