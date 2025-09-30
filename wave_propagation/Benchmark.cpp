@@ -40,9 +40,26 @@ void Benchmark::run_scaling(Network& net, int steps, ScheduleType st, int chunk,
         for (int r=0;r<reps;++r){
             reset_initial(net);
             omp_set_num_threads(p);
-            WavePropagator wp(&net, /*dt*/0.01, /*S0*/0.0, /*omega*/0.0);
+            RunParams bench_params;
+            bench_params.steps = steps;
+            bench_params.schedule = st;
+            bench_params.chunk = chunk;
+            bench_params.dt = 0.01;
+            bench_params.S0 = 0.0;
+            bench_params.omega = 0.0;
+            bench_params.noise = NoiseMode::Off;
+            bench_params.energyAccum = EnergyAccum::Reduction;
+            bench_params.taskloop = false;
+            bench_params.dump_frames = false;
+            bench_params.energy_out.clear();
+            bench_params.network = net.is2D() ? "2d" : "1d";
+            bench_params.N = net.size();
+            bench_params.Lx = net.Lx();
+            bench_params.Ly = net.Ly();
+            bench_params.threads = p;
+            WavePropagator wp(net, bench_params);
             double t0 = omp_get_wtime();
-            wp.run_fused(steps, st, chunk, /*energy_out*/"");
+            wp.run(bench_params.energy_out);
             double t1 = omp_get_wtime();
             times.push_back(t1-t0);
         }
@@ -125,9 +142,26 @@ void Benchmark::run_time_vs_chunk_dynamic(Network& net, int steps, int threads, 
         std::vector<double> times;
         for (int r=0;r<reps;++r){
             reset_initial(net);
-            WavePropagator wp(&net, 0.01, 0.0, 0.0);
+            RunParams bench_params;
+            bench_params.steps = steps;
+            bench_params.schedule = ScheduleType::Dynamic;
+            bench_params.chunk = c;
+            bench_params.dt = 0.01;
+            bench_params.S0 = 0.0;
+            bench_params.omega = 0.0;
+            bench_params.noise = NoiseMode::Off;
+            bench_params.energyAccum = EnergyAccum::Reduction;
+            bench_params.taskloop = false;
+            bench_params.dump_frames = false;
+            bench_params.energy_out.clear();
+            bench_params.network = net.is2D() ? "2d" : "1d";
+            bench_params.N = net.size();
+            bench_params.Lx = net.Lx();
+            bench_params.Ly = net.Ly();
+            bench_params.threads = threads;
+            WavePropagator wp(net, bench_params);
             double t0 = omp_get_wtime();
-            wp.run_fused(steps, ScheduleType::Dynamic, c, "");
+            wp.run(bench_params.energy_out);
             double t1 = omp_get_wtime();
             times.push_back(t1-t0);
         }
