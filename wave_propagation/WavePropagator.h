@@ -20,6 +20,7 @@ private:
     Network& net_;
     RunParams params_;
     double tcur_ = 0.0;
+    double last_1d_sample_ = 0.0;
 
     std::vector<double> omega_i_;
     int single_idx_ = -1;

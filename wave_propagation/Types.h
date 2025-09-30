@@ -49,4 +49,5 @@ struct RunParams {
     int frame_every = 10;
     bool do_bench = false;
     std::string energy_out = "results/energy_trace.dat";
+    bool use_nowait = false;
 };
