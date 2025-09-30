@@ -13,16 +13,20 @@ clean:
 	rm -f $(TARGET) *.o
 	rm -rf results videos
 
-.PHONY: clean benchmark analysis
+.PHONY: clean benchmark analysis amdahl
 
 benchmark: $(TARGET)
 	@mkdir -p results
 	./$(TARGET) --benchmark
 
 analysis: $(TARGET)
-	@mkdir -p results
-	@$(PY) scripts/plot_speedup.py
-	@$(PY) scripts/plot_time_vs_chunk.py
+        @mkdir -p results
+        @$(PY) scripts/plot_speedup.py
+        @$(PY) scripts/plot_time_vs_chunk.py
+        @$(PY) scripts/plot_amdahl.py
+
+amdahl: $(TARGET)
+        @$(PY) scripts/plot_amdahl.py --input results/scaling.dat --output results/amdahl.png
 
 # =====================[ Video helpers ]=====================
 # Puedes sobreescribir estas variables al invocar make:

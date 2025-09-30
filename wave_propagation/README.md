@@ -32,6 +32,12 @@ Genera:
 - `results/time_vs_chunk_dynamic.dat` → `time_vs_chunk_dynamic.png`
 - `results/amdahl.png` → comparación `S_p` medido vs. predicción de Amdahl (las desviaciones provienen de caché, NUMA y ruido del sistema).
 
+## Cómo generar video
+- **1D:** `make video1d`
+- **2D:** `make video2d`
+
+Tips: puedes aumentar `--frame-every` si quieres que avance más lento y ajustar la resolución para mantener buena calidad (requisito del curso).
+
 ## Parámetros recomendados
 - `--schedule dynamic` con `--chunk auto` (heurística elige 256 para dynamic).
 - Si la carga es homogénea, `static` también sirve; `guided` es intermedio.
