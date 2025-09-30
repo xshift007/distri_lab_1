@@ -29,7 +29,7 @@ WavePropagator::WavePropagator(Network& net, const RunParams& params)
 double WavePropagator::source_val(int idx, double time) const{
     switch (params_.noise){
         case NoiseMode::Off:
-            return (params_.omega != 0.0) ? params_.S0 * std::sin(params_.omega * time) : params_.S0;
+            return 0.0;
         case NoiseMode::Global:
             return params_.S0 * std::sin(params_.omega * time);
         case NoiseMode::PerNode:
