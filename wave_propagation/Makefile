@@ -6,25 +6,51 @@ TARGET = wave_propagation
 SOURCES = main.cpp Node.cpp Network.cpp WavePropagator.cpp Benchmark.cpp
 HEADERS = Types.h Node.h Network.h WavePropagator.h Benchmark.h
 
+PY ?= python3
+FPS ?= 20
+VIDEO_FORMAT ?= mp4
+FRAMES_DIR := results/frames
+VIDEOS_DIR := videos
+
 $(TARGET): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
 
 clean:
 	rm -f $(TARGET) *.o
-	rm -rf results
+	rm -rf results $(VIDEOS_DIR)
 
-.PHONY: clean benchmark analysis
+.PHONY: clean benchmark analysis frames_clean videos_dir video1d video2d video_all
 
 benchmark: $(TARGET)
 	@mkdir -p results
 	./$(TARGET) --benchmark
 
 analysis: $(TARGET)
-	@mkdir -p results results/frames
-	@echo "[analysis] corriendo escalamiento..."
-	@./$(TARGET) --network 2d --Lx 256 --Ly 256 --steps 800 --schedule dynamic --chunk auto \
-	        --threads 8 --energy-accum reduction --noise pernode --S0 0.05 \
-	        --omega-mu 8.0 --omega-sigma 1.5 --collapse2 --dump-frames --frame-every 20
-	@python3 scripts/plot_speedup.py
-	@python3 scripts/plot_chunk.py
-	@python3 scripts/make_video.py results/frames out.gif
+	@mkdir -p results
+	@$(PY) scripts/plot_speedup.py
+	@$(PY) scripts/plot_time_vs_chunk.py
+
+frames_clean:
+	@rm -rf $(FRAMES_DIR) && mkdir -p $(FRAMES_DIR)
+
+videos_dir:
+	@mkdir -p $(VIDEOS_DIR)
+
+# 1D
+video1d: $(TARGET) videos_dir frames_clean
+	@./$(TARGET) --network 1d --N 256 --steps 200 --threads 8 \
+	  --schedule dynamic --chunk auto --noise global --S0 0.2 --omega 6.0 \
+	  --dump-frames --frame-every 1
+	@$(PY) scripts/make_video.py "$(FRAMES_DIR)" --outdir "$(VIDEOS_DIR)" \
+	  --fps $(FPS) --format $(VIDEO_FORMAT)
+
+# 2D
+video2d: $(TARGET) videos_dir frames_clean
+	@./$(TARGET) --network 2d --Lx 64 --Ly 64 --steps 200 --threads 8 \
+	  --schedule dynamic --chunk auto --noise single --S0 0.3 \
+	  --omega-mu 8.0 --omega-sigma 1.0 \
+	  --dump-frames --frame-every 2
+	@$(PY) scripts/make_video.py "$(FRAMES_DIR)" --outdir "$(VIDEOS_DIR)" \
+	  --fps $(FPS) --format $(VIDEO_FORMAT)
+
+video_all: video1d video2d
