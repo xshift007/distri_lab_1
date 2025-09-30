@@ -103,13 +103,18 @@ void WavePropagator::run(const std::string& energy_out){
 
     double dt = params_.dt;
     double local_t = tcur_;
+    double final_t = local_t;
     double time_for_step = 0.0;
     double E_global = 0.0;
+    double last_committed_value = last_1d_sample_;
 
     const int Lx = net_.Lx();
     const int Ly = net_.Ly();
+    const bool is2D = net_.is2D();
 
-    #pragma omp parallel shared(time_for_step, E_global)
+    #pragma omp parallel default(none) \
+        shared(nodes, N, D, g, dt, time_for_step, E_global, chunk, grain, Lx, Ly, energy_file, final_t, last_committed_value, is2D) \
+        firstprivate(local_t)
     {
         for (int it=0; it<params_.steps; ++it){
             #pragma omp single
@@ -130,7 +135,7 @@ void WavePropagator::run(const std::string& energy_out){
             };
 
             if (params_.taskloop){
-                if (net_.is2D()){
+                if (is2D){
                     #pragma omp single
                     {
                         #pragma omp taskloop grainsize(grain)
@@ -152,7 +157,7 @@ void WavePropagator::run(const std::string& energy_out){
                         #pragma omp taskwait
                     }
                 }
-            } else if (net_.is2D()){
+            } else if (is2D){
                 if (params_.collapse2){
                     if (params_.schedule == ScheduleType::Static){
                         #pragma omp for schedule(static, chunk) collapse(2)
@@ -252,9 +257,21 @@ void WavePropagator::run(const std::string& energy_out){
                 }
             }
 
-            #pragma omp for
-            for (int i=0; i<N; ++i){
-                nodes[i].commit();
+            if (is2D){
+                #pragma omp for nowait
+                for (int i=0; i<N; ++i){
+                    nodes[i].commit();
+                }
+            } else {
+                #pragma omp for nowait lastprivate(last_committed_value)
+                for (int i=0; i<N; ++i){
+                    nodes[i].commit();
+                    last_committed_value = nodes[i].get();
+                }
+            }
+
+            if (!params_.use_nowait){
+                #pragma omp barrier
             }
 
             #pragma omp single
@@ -263,15 +280,19 @@ void WavePropagator::run(const std::string& energy_out){
                     dump_energy(energy_file, it+1, E_global);
                 }
                 if (params_.dump_frames && params_.frame_every>0 && (it % params_.frame_every == 0)){
-                    if (net_.is2D()) dump_frame_2d(it);
+                    if (is2D) dump_frame_2d(it);
                     else dump_frame_1d(it);
                 }
+                if (!is2D){
+                    last_1d_sample_ = last_committed_value;
+                }
                 local_t += dt;
+                final_t = local_t;
             }
         }
     }
 
-    tcur_ = local_t;
+    tcur_ = final_t;
     if (energy_file){
         energy_file.flush();
     }

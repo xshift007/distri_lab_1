@@ -24,11 +24,13 @@ Salida: `results/energy_trace.dat`
 make benchmark
 python3 scripts/plot_speedup.py
 python3 scripts/plot_chunk.py
+python3 scripts/plot_amdahl.py
 ```
 Genera:
 - `results/scaling.dat` → `speedup.png` y `efficiency.png`
   - Formato: `threads mean_time std_time speedup speedup_err efficiency efficiency_err`
 - `results/time_vs_chunk_dynamic.dat` → `time_vs_chunk_dynamic.png`
+- `results/amdahl.png` → comparación `S_p` medido vs. predicción de Amdahl (las desviaciones provienen de caché, NUMA y ruido del sistema).
 
 ## Parámetros recomendados
 - `--schedule dynamic` con `--chunk auto` (heurística elige 256 para dynamic).
