@@ -1,132 +1,177 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-import subprocess, sys, time, csv, os
+"""
+Corre una matriz de configuraciones y guarda resultados en CSV con
+warm-up y repeticiones. Ajusta chunk por número de threads.
+Compatibilidad Windows/MSYS2: usa ruta absoluta al binario y shell=False.
+"""
+
+import os, csv, time, subprocess
+from statistics import median
 from pathlib import Path
+import sys
 
-def exe_path():
-    # Try to autodetect exe name cross-platform
-    cand = ["wave_propagation", "wave_propagation.exe", "./wave_propagation", "./wave_propagation.exe"]
-    for c in cand:
-        p = Path(c)
-        if p.exists() and p.is_file():
-            return str(p)
-    # Fallback: assume in current dir
-    return "./wave_propagation"
+RESULTS_DIR = "results"
+CSV_PATH = os.path.join(RESULTS_DIR, "matrix_results.csv")
 
-def parse_energy(path):
-    # returns (E0, Eend, lines_count)
-    E0, Eend = None, None
-    lines = 0
-    if not Path(path).exists():
-        return (None, None, 0)
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            s = line.strip()
-            if not s or s.startswith("#"): continue
-            parts = s.split()
-            if len(parts)>=2:
-                try:
-                    step = int(float(parts[0]))
-                    e = float(parts[1])
-                    if E0 is None: E0 = e
-                    Eend = e
-                    lines += 1
-                except:
-                    pass
-    return (E0, Eend, lines)
+# ========= Detección de binario (Windows vs POSIX) =========
+ROOT = Path(__file__).resolve().parents[1]
+if os.name == "nt" or sys.platform.startswith("win"):
+    BIN_PATH = ROOT / "wave_propagation.exe"
+else:
+    BIN_PATH = ROOT / "wave_propagation"
+
+BIN = str(BIN_PATH)
+
+# =================== Config base (según tu idea) ===================
+networks = [
+    ("2d", {"Lx": 256, "Ly": 256}),   # caso principal (óptimo)
+    ("1d", {"N": 20000}),             # 1D chico -> mal escalado (intencional)
+    ("1d", {"N": 200000})             # 1D grande -> mejora visible
+]
+
+# Aumenta pasos en 2D para amortizar overhead (clase 2)
+steps_2d = 2000
+steps_1d = 1000
+
+# Sin fuente (bench limpio)
+noise_mode = "off"   # "off|global|pernode|single"
+S0 = 0.0
+omega = 0.0
+
+schedules = ["static", "dynamic", "guided"]
+
+# Barrido de chunk más rico; el script elegirá el mejor por p
+chunks_by_threads = {
+    1:   [128, 256, 512, "auto"],
+    2:   [128, 256, 512, "auto"],
+    4:   [128, 256, 512, 1024, "auto"],
+    8:   [256, 512, 1024, 2048, "auto"],
+}
+
+threads_list = [1, 2, 4, 8]
+
+# Warm-up y repeticiones
+WARMUP  = 1
+REPEATS = 5
+AGGREGATOR = "median"  # "median" o "min"
+
+# ======================== Utilitarios ==============================
+
+def ensure_dirs():
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+def steps_for(network_kind: str) -> int:
+    return steps_2d if network_kind == "2d" else steps_1d
+
+def build_cmd(kind: str, dims: dict, steps: int, schedule: str, chunk, threads: int):
+    """
+    Devuelve lista de argumentos (shell=False). Compatible con Windows.
+    """
+    args = [BIN, "--network", kind]
+    if kind == "2d":
+        args += ["--Lx", str(dims["Lx"]), "--Ly", str(dims["Ly"])]
+    else:
+        args += ["--N", str(dims["N"])]
+
+    args += [
+        "--steps", str(steps),
+        "--schedule", schedule,
+        "--threads", str(threads),
+        "--noise", noise_mode,
+        "--S0", str(S0),
+        "--omega", str(omega),
+    ]
+
+    # chunk puede ser int o "auto"
+    if isinstance(chunk, int):
+        args += ["--chunk", str(chunk)]
+    else:
+        args += ["--chunk", "auto"]
+
+    # NUNCA hacer I/O de frames en bench
+    return args
+
+def run_once(args_list) -> float:
+    """
+    Ejecuta el binario con shell=False. Retorna tiempo en segundos.
+    """
+    if not os.path.isfile(BIN):
+        raise FileNotFoundError(
+            f"No encuentro el binario en: {BIN}\n"
+            "Compila primero con: make\n"
+            "Si estás en Windows, verifica que exista 'wave_propagation.exe' en la carpeta del proyecto."
+        )
+    t0 = time.perf_counter()
+    res = subprocess.run(args_list, shell=False, capture_output=True, text=True)
+    t1 = time.perf_counter()
+
+    if res.returncode != 0:
+        print("ERROR al ejecutar:", " ".join(args_list))
+        print("STDOUT:\n", res.stdout)
+        print("STDERR:\n", res.stderr)
+        raise RuntimeError("falló ejecución")
+
+    return t1 - t0
+
+def aggregate(times, how="median"):
+    if how == "min":
+        return min(times)
+    return median(times)
+
+def write_header_if_needed(csv_path: str):
+    if not os.path.exists(csv_path):
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "network","size","schedule","chunk","threads","steps","time_sec"
+            ])
+
+def size_str(kind: str, dims: dict) -> str:
+    return f"{dims['Lx']}x{dims['Ly']}" if kind == "2d" else str(dims["N"])
+
+def append_row(csv_path: str, row):
+    with open(csv_path, "a", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(row)
+
+# ======================== Ejecución matriz =========================
 
 def main():
-    exe = exe_path()
-    results_dir = Path("results")
-    results_dir.mkdir(exist_ok=True)
-    csv_path = results_dir/"matrix_results.csv"
+    ensure_dirs()
+    write_header_if_needed(CSV_PATH)
 
-    # Test matrix (toca si quieres menos/más casos)
-    networks = [
-        ("1d", {"N": 20000}),
-        ("2d", {"Lx": 256, "Ly": 256}),
-    ]
-    steps = 400
-    dt = 0.01
-    D = 0.1
-    gamma = 0.01
-    sources = [(0.0, 0.0), (0.1, 0.5)]  # (S0, omega)
+    print("[run_matrix] Comenzando matriz...")
+    print(f"[run_matrix] Binario: {BIN}")
 
-    schedules = ["static", "dynamic", "guided"]
-    chunks = ["auto", 64, 128, 256, 512]
-    threads_list = [1, 2, 4, 8]
-
-    rows = []
-    for net_name, dims in networks:
-        for (S0, omega) in sources:
-            for sched in schedules:
+    for kind, dims in networks:
+        st = steps_for(kind)
+        for schedule in schedules:
+            for p in threads_list:
+                chunks = chunks_by_threads.get(p, [128,256,512,"auto"])
                 for chunk in chunks:
-                    for thr in threads_list:
-                        # Build command
-                        cmd = [exe, "--network", net_name,
-                               "--steps", str(steps),
-                               "--dt", str(dt),
-                               "--D", str(D),
-                               "--gamma", str(gamma),
-                               "--S0", str(S0),
-                               "--omega", str(omega),
-                               "--schedule", sched,
-                               "--chunk", str(chunk) if chunk!="auto" else "auto",
-                               "--threads", str(thr)]
-                        if net_name == "1d":
-                            cmd += ["--N", str(dims["N"])]
-                        else:
-                            cmd += ["--Lx", str(dims["Lx"]), "--Ly", str(dims["Ly"])]
-                        # Run
-                        t0 = time.perf_counter()
-                        cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                        t1 = time.perf_counter()
-                        elapsed = t1 - t0
+                    args = build_cmd(kind, dims, st, schedule, chunk, p)
 
-                        # Move/rename energy trace to keep it
-                        src_energy = results_dir/"energy_trace.dat"
-                        E0, Eend, lines = parse_energy(src_energy) if src_energy.exists() else (None, None, 0)
-                        out_energy = results_dir/f"energy_{net_name}_S{S0}_w{omega}_{sched}_chunk{chunk}_t{thr}.dat"
-                        if src_energy.exists():
-                            try:
-                                src_energy.rename(out_energy)
-                            except Exception:
-                                # If rename fails (Windows locks), copy then remove
-                                import shutil
-                                shutil.copyfile(src_energy, out_energy)
-                                os.remove(src_energy)
+                    # warm-up
+                    for _ in range(WARMUP):
+                        _ = run_once(args)
 
-                        row = {
-                            "network": net_name,
-                            **{k:v for k,v in dims.items()},
-                            "steps": steps,
-                            "S0": S0, "omega": omega,
-                            "schedule": sched,
-                            "chunk": str(chunk),
-                            "threads": thr,
-                            "time_sec": round(elapsed, 6),
-                            "E0": E0 if E0 is not None else "",
-                            "Eend": Eend if Eend is not None else "",
-                            "energy_lines": lines,
-                            "stdout_last": (cp.stdout.strip().splitlines()[-1] if cp.stdout else ""),
-                            "stderr_last": (cp.stderr.strip().splitlines()[-1] if cp.stderr else "")
-                        }
-                        rows.append(row)
-                        print(f"OK: {row}")
+                    times = []
+                    for _ in range(REPEATS):
+                        times.append(run_once(args))
 
-    # Write CSV
-    cols = ["network","N","Lx","Ly","steps","S0","omega","schedule","chunk","threads","time_sec","E0","Eend","energy_lines","stdout_last","stderr_last"]
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
-        w.writeheader()
-        for r in rows:
-            # fill missing keys (depending on 1d/2d)
-            if "N" not in r: r["N"]=""
-            if "Lx" not in r: r["Lx"]=""
-            if "Ly" not in r: r["Ly"]=""
-            w.writerow(r)
+                    t_final = aggregate(times, AGGREGATOR)
 
-    print(f"\nResultados guardados en {csv_path}")
-    print("Energías únicas en results/energy_*.dat")
+                    append_row(CSV_PATH, [
+                        kind, size_str(kind, dims), schedule, str(chunk), p, st, f"{t_final:.6f}"
+                    ])
+
+                    print(f"[ok] {kind:>2} size={size_str(kind,dims):>8} "
+                          f"sch={schedule:<7} chunk={str(chunk):>5} p={p} "
+                          f"time={t_final:.4f}s")
+
+    print(f"[run_matrix] Listo -> {CSV_PATH}")
 
 if __name__ == "__main__":
     main()

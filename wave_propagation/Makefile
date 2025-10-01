@@ -1,69 +1,107 @@
-CXX = g++
-CXXFLAGS = -Wall -Wextra -O3 -fopenmp -std=c++17
-LDFLAGS = -fopenmp
+# =========================[ Compilación ]=========================
+CXX       = g++
+CXXFLAGS  = -Wall -Wextra -O3 -march=native -fopenmp -std=c++17
+LDFLAGS   = -fopenmp
 
-TARGET = wave_propagation
+TARGET  = wave_propagation
 SOURCES = main.cpp Node.cpp Network.cpp WavePropagator.cpp Benchmark.cpp
 HEADERS = Types.h Node.h Network.h WavePropagator.h Benchmark.h
 
+# =========================[ Python & Paths ]======================
+PY           ?= python3     # cambia a 'python' si tu entorno lo requiere
+RESULTS_DIR  := results
+FRAMES_DIR   := $(RESULTS_DIR)/frames
+VIDEOS_DIR   := videos
+
+# =========================[ Video presets ]=======================
+# Puedes overridear desde CLI, p.ej.: VIDEO_FORMAT=gif make video2d
+VIDEO_FORMAT ?= mp4          # gif | mp4
+FPS          ?= 20
+VIDEO_DPI    ?= 120
+VIDEO_INTERP ?= bilinear     # nearest | bilinear | none
+
+# Presets de visualización (SOLO FLAGS SOPORTADOS POR scripts/make_video.py)
+VIDEO1D_FLAGS ?= --mode 1d --downsample 1500 --zoom1d 250 --mark-peak --zero-center-1d
+VIDEO2D_FLAGS ?= --mode 2d --interp $(VIDEO_INTERP) --colorbar
+
+# =========================[ Reglas base ]=========================
 $(TARGET): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
 
 clean:
 	rm -f $(TARGET) *.o
-	rm -rf results videos
+	rm -rf $(RESULTS_DIR) $(VIDEOS_DIR)
 
-.PHONY: clean benchmark analysis amdahl
+.PHONY: clean benchmark analysis amdahl help \
+        video1d video2d video_all frames_clean videos_dir matrix analyze_matrix
 
+help:
+	@echo "Targets principales:"
+	@echo "  make                  -> compila $(TARGET)"
+	@echo "  make benchmark        -> corre benchmarks y deja .dat en $(RESULTS_DIR)"
+	@echo "  make analysis         -> genera speedup.png, efficiency.png, time_vs_chunk_dynamic.png y amdahl.png"
+	@echo "  make video1d          -> genera frames 1D y arma video (gif/mp4)"
+	@echo "  make video2d          -> genera frames 2D y arma video (gif/mp4)"
+	@echo "  make matrix           -> corre scripts/run_matrix.py y deja CSV en $(RESULTS_DIR)"
+	@echo "  make analyze_matrix   -> genera speedup_* y time_vs_chunk_dynamic_*.png desde el CSV"
+	@echo "Variables útiles (override por CLI): VIDEO_FORMAT=gif FPS=22 VIDEO_INTERP=nearest"
+
+# =========================[ Bench & Analysis ]====================
 benchmark: $(TARGET)
-	@mkdir -p results
+	@mkdir -p $(RESULTS_DIR)
 	./$(TARGET) --benchmark
 
 analysis: $(TARGET)
-        @mkdir -p results
-        @$(PY) scripts/plot_speedup.py
-        @$(PY) scripts/plot_time_vs_chunk.py
-        @$(PY) scripts/plot_amdahl.py
+	@mkdir -p $(RESULTS_DIR)
+	@$(PY) scripts/plot_speedup.py
+	@$(PY) scripts/plot_time_vs_chunk.py
+	@$(PY) scripts/plot_amdahl.py
+	@echo "Listo: $(RESULTS_DIR)/speedup.png, $(RESULTS_DIR)/efficiency.png, $(RESULTS_DIR)/time_vs_chunk_dynamic.png, $(RESULTS_DIR)/amdahl.png"
 
 amdahl: $(TARGET)
-        @$(PY) scripts/plot_amdahl.py --input results/scaling.dat --output results/amdahl.png
+	@mkdir -p $(RESULTS_DIR)
+	@$(PY) scripts/plot_amdahl.py
 
-# =====================[ Video helpers ]=====================
-# Puedes sobreescribir estas variables al invocar make:
-PY            ?= python3
-FPS           ?= 20
-VIDEO_FORMAT  ?= mp4
-FRAMES_DIR    := results/frames
-VIDEOS_DIR    := videos
-
-# Presets de visualización (puedes overridearlos desde CLI)
-VIDEO1D_FLAGS ?= --mode 1d --downsample 1500 --zoom1d 250 --mark-peak --zero-center-1d
-VIDEO2D_FLAGS ?= --mode 2d --norm robust --robust-pct 1 --interp bilinear --colorbar --zero-center-2d --ema 0.6
-
-.PHONY: video1d video2d video_all frames_clean videos_dir
-
+# =========================[ Helpers video ]=======================
 frames_clean:
 	@rm -rf $(FRAMES_DIR) && mkdir -p $(FRAMES_DIR)
 
 videos_dir:
 	@mkdir -p $(VIDEOS_DIR)
 
-# --------------------- 1D: línea amplitud vs nodo -----------------------
+# =========================[ Videos ]==============================
+# 1D: línea amplitud vs nodo
 video1d: $(TARGET) videos_dir frames_clean
-	@./$(TARGET) --network 1d --N 256 --steps 200 --threads 8 \
-	--schedule dynamic --chunk auto --noise global --S0 0.2 --omega 6.0 \
-	--dump-frames --frame-every 1
-	@$(PY) scripts/make_video.py "$(FRAMES_DIR)" --outdir "$(VIDEOS_DIR)" \
-	--fps $(FPS) --format $(VIDEO_FORMAT) $(VIDEO1D_FLAGS)
+	@echo "[video1d] generando frames 1D..."
+	./$(TARGET) --network 1d --N 256 --steps 200 --threads 8 \
+		--schedule dynamic --chunk auto \
+		--noise off \
+		--dump-frames --frame-every 1
+	@echo "[video1d] construyendo video..."
+	$(PY) scripts/make_video.py "$(FRAMES_DIR)" \
+		--outdir "$(VIDEOS_DIR)" --format $(VIDEO_FORMAT) \
+		--fps $(FPS) --dpi $(VIDEO_DPI) $(VIDEO1D_FLAGS)
+	@echo "[video1d] listo: $(VIDEOS_DIR)/video_1d.$(VIDEO_FORMAT)"
 
-# ----------------------- 2D: mapa de calor ------------------------------
+# 2D: mapa de calor
 video2d: $(TARGET) videos_dir frames_clean
-	@./$(TARGET) --network 2d --Lx 64 --Ly 64 --steps 200 --threads 8 \
-	--schedule dynamic --chunk auto --noise single --S0 0.3 \
-	--omega-mu 8.0 --omega-sigma 1.0 \
-	--dump-frames --frame-every 2
-	@$(PY) scripts/make_video.py "$(FRAMES_DIR)" --outdir "$(VIDEOS_DIR)" \
-	--fps $(FPS) --format $(VIDEO_FORMAT) $(VIDEO2D_FLAGS)
+	@echo "[video2d] generando frames 2D..."
+	./$(TARGET) --network 2d --Lx 64 --Ly 64 --steps 200 --threads 8 \
+		--schedule dynamic --chunk auto \
+		--noise off \
+		--dump-frames --frame-every 2
+	@echo "[video2d] construyendo video..."
+	$(PY) scripts/make_video.py "$(FRAMES_DIR)" \
+		--outdir "$(VIDEOS_DIR)" --format $(VIDEO_FORMAT) \
+		--fps $(FPS) --dpi $(VIDEO_DPI) $(VIDEO2D_FLAGS)
+	@echo "[video2d] listo: $(VIDEOS_DIR)/video_2d.$(VIDEO_FORMAT)"
 
 video_all: video1d video2d
-# ===========================================================
+
+# =========================[ Matriz de pruebas ]===================
+matrix:
+	@mkdir -p $(RESULTS_DIR)
+	@$(PY) scripts/run_matrix.py
+
+analyze_matrix:
+	@$(PY) scripts/analyze_matrix.py
