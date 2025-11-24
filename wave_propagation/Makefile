@@ -104,4 +104,14 @@ matrix:
 	@$(PY) scripts/run_matrix.py
 
 analyze_matrix:
-	@$(PY) scripts/analyze_matrix.py
+@$(PY) scripts/analyze_matrix.py
+
+demo_bonus: $(TARGET)
+	@echo "Corriendo simulacion con Ruido por Nodo (Bonus)..."
+	./$(TARGET) --network 2d --Lx 200 --Ly 200 --steps 1000 \
+		--dt 0.05 --D 0.1 --gamma 0.005 \
+		--noise pernode --S0 1.0 --omega-mu 10.0 --omega-sigma 2.0 \
+		--threads 4
+	@echo "Graficando energia..."
+	@$(PY) scripts/plot_energy.py
+	@echo "Resultado en results/energy_plot.png"
