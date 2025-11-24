@@ -25,7 +25,6 @@ static void usage(){
               << "  --threads <int>\n"
               << "  --taskloop --grain <int>\n"
               << "  --energy-accum {reduction,atomic,critical}\n"
-              << "  --use-nowait\n"
               << "  --collapse2\n"
               << "  --dump-frames --frame-every <int>\n"
               << "  --benchmark\n";
@@ -88,7 +87,6 @@ static RunParams parse_args(int argc, char** argv){
         else if (k=="--taskloop") params.taskloop = true;
         else if (k=="--grain") params.grain = std::stoi(next("--grain <int>"));
         else if (k=="--energy-accum") params.energyAccum = parse_energy_accum(next("--energy-accum <reduction|atomic|critical>"));
-        else if (k=="--use-nowait") params.use_nowait = true;
         else if (k=="--collapse2") params.collapse2 = true;
         else if (k=="--dump-frames") params.dump_frames = true;
         else if (k=="--frame-every") params.frame_every = std::stoi(next("--frame-every <int>"));

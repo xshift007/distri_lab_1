@@ -258,21 +258,19 @@ void WavePropagator::run(const std::string& energy_out){
             }
 
             if (is2D){
-                #pragma omp for nowait
+                #pragma omp for
                 for (int i=0; i<N; ++i){
                     nodes[i].commit();
                 }
             } else {
-                #pragma omp for nowait lastprivate(last_committed_value)
+                #pragma omp for lastprivate(last_committed_value)
                 for (int i=0; i<N; ++i){
                     nodes[i].commit();
                     last_committed_value = nodes[i].get();
                 }
             }
 
-            if (!params_.use_nowait){
-                #pragma omp barrier
-            }
+            #pragma omp barrier
 
             #pragma omp single
             {
