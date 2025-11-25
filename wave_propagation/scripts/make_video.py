@@ -1,227 +1,219 @@
-import sys, os, glob, argparse
+import argparse
+import sys
+from pathlib import Path
+from typing import List, Tuple, Optional, Union, Generator
 import numpy as np
-
-# Backend no interactivo (Windows/MSYS2 friendly)
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 
-# ---------- utils ----------
-def list_frames(folder):
-    files = sorted(glob.glob(os.path.join(folder, "amp_t*.*")))
-    return files
+# Intentar importar tqdm para barra de progreso, fallback si no existe
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Mock simple si no está instalado
+    def tqdm(iterable, **kwargs): return iterable
 
-def read_frame(fp):
-    if fp.endswith(".csv"):
-        return np.loadtxt(fp, delimiter=",")
-    return np.loadtxt(fp)
+# Configuración no interactiva para servidores/WSL
+matplotlib.use("Agg")
 
-def is_1d_array(A):
-    # 1D si es vector o si matriz con 1 fila o 1 columna
-    if A.ndim == 1:
-        return True
-    if A.ndim == 2 and (A.shape[0] == 1 or A.shape[1] == 1):
-        return True
-    return False
-
-def split_1d_2d(files, max_probe=10):
-    f1d, f2d = [], []
-    for fp in files[:max_probe]:
+class FrameLoader:
+    """Maneja la carga de archivos de datos."""
+    @staticmethod
+    def load(path: Path) -> np.ndarray:
         try:
-            A = read_frame(fp)
-        except Exception:
-            continue
-        if is_1d_array(A):
-            f1d.append(fp)
-        else:
-            f2d.append(fp)
-    # si sólo probamos algunos, completa por extensión
-    # (heurística: .dat -> 1d; resto -> usa lo ya clasificado)
-    if f1d or f2d:
-        if any(fp.endswith(".dat") for fp in files):
-            f1d_all = [fp for fp in files if fp.endswith(".dat")]
-        else:
-            f1d_all = f1d  # ya están clasificados
-        # 2D: csv que no sean 1D
-        f2d_all = []
-        for fp in files:
-            if fp.endswith(".csv"):
-                try:
-                    A = read_frame(fp)
-                    if not is_1d_array(A):
-                        f2d_all.append(fp)
-                    else:
-                        f1d_all.append(fp)
-                except Exception:
-                    pass
-        # dedup ordenado
-        f1d_all = sorted(list(dict.fromkeys(f1d_all)))
-        f2d_all = sorted(list(dict.fromkeys(f2d_all)))
-        return f1d_all, f2d_all
-    # si no pudimos leer nada, devolvemos listas vacías
-    return [], []
+            if path.suffix == ".csv":
+                return np.loadtxt(path, delimiter=",")
+            return np.loadtxt(path)
+        except Exception as e:
+            print(f"[Error] No se pudo leer {path}: {e}")
+            return np.array([])
 
-def fig_to_rgb(fig):
-    fig.canvas.draw()
-    try:
+    @staticmethod
+    def detect_mode(files: List[Path], probe_count: int = 10) -> str:
+        """Detecta si los archivos son 1D o 2D inspeccionando los primeros."""
+        votes_1d = 0
+        votes_2d = 0
+        
+        for fp in files[:probe_count]:
+            data = FrameLoader.load(fp)
+            if data.size == 0: continue
+            
+            # Criterio: 1D si es vector o dimensión 1 en algún eje
+            if data.ndim == 1 or (data.ndim == 2 and 1 in data.shape):
+                votes_1d += 1
+            else:
+                votes_2d += 1
+        
+        if votes_2d > votes_1d:
+            return "2d"
+        return "1d"
+
+class Renderer:
+    """Clase base abstracta para renderizadores."""
+    def __init__(self, config: argparse.Namespace, global_limits: Tuple[float, float]):
+        self.cfg = config
+        self.vmin, self.vmax = global_limits
+        # Ajuste de cero centrado si se requiere
+        if hasattr(self.cfg, 'zero_center_1d') and self.cfg.zero_center_1d:
+             limit = max(abs(self.vmin), abs(self.vmax))
+             self.vmin, self.vmax = -limit, limit
+
+    def render(self, data: np.ndarray, step_idx: int, total_steps: int) -> np.ndarray:
+        raise NotImplementedError
+
+    def _fig_to_rgb(self, fig: plt.Figure) -> np.ndarray:
+        """Convierte una figura de Matplotlib a un array RGB."""
+        fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         return buf.reshape(h, w, 3)
-    except AttributeError:
-        buf = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)
-        return buf[:, :, :3]
 
-def collect_stats(files):
-    vals = []
-    for fp in files:
-        A = read_frame(fp).astype(float)
-        vals.append(A.ravel())
-    if not vals:
-        return -1.0, 1.0
-    v = np.concatenate(vals)
-    vmin, vmax = float(v.min()), float(v.max())
-    if vmin == vmax:
-        vmax = vmin + 1e-9
-    return vmin, vmax
-
-# ---------- render 1D ----------
-def make_video_1d(frames, out_path, fps=12, downsample=None, zoom1d=None,
-                  zero_center=False, show_peak=False, dpi=110, fmt="gif"):
-    if not frames:
-        print("[1D] No hay frames 1D"); return
-    # rango global base
-    gmin, gmax = collect_stats(frames)
-    if zero_center:
-        vmax = max(abs(gmin), abs(gmax)); gmin, gmax = -vmax, vmax
-
-    writer = None
-    if fmt == "mp4":
-        try:
-            writer = imageio.get_writer(out_path.replace(".gif", ".mp4"), fps=fps)
-            out_path = out_path.replace(".gif", ".mp4")
-        except Exception:
-            writer = None
-
-    imgs = []
-    for k, fp in enumerate(frames, 1):
-        y = read_frame(fp).astype(float).ravel()
+class Renderer1D(Renderer):
+    def render(self, data: np.ndarray, step_idx: int, total_steps: int) -> np.ndarray:
+        y = data.ravel()
         x = np.arange(len(y))
-        if downsample and len(x) > downsample:
-            step = int(np.ceil(len(x) / float(downsample)))
-            x = x[::step]; y = y[::step]
-        if zoom1d and zoom1d > 0:
-            i0 = int(np.argmax(np.abs(y)))
-            L = max(0, i0 - zoom1d); R = min(len(y)-1, i0 + zoom1d)
-            x = x[L:R+1]; y = y[L:R+1]
 
-        fig = plt.figure(figsize=(8,4), dpi=dpi)
-        ax = plt.gca()
-        ax.plot(x, y, linewidth=2)
+        # Downsampling para rendimiento
+        if self.cfg.downsample and len(x) > self.cfg.downsample:
+            step = int(np.ceil(len(x) / self.cfg.downsample))
+            x = x[::step]
+            y = y[::step]
+
+        # Zoom
+        if self.cfg.zoom1d and self.cfg.zoom1d > 0:
+            peak = int(np.argmax(np.abs(y)))
+            L = max(0, peak - self.cfg.zoom1d)
+            R = min(len(y)-1, peak + self.cfg.zoom1d)
+            x = x[L:R+1]
+            y = y[L:R+1]
+
+        fig = plt.figure(figsize=(8, 4), dpi=self.cfg.dpi)
+        ax = fig.add_subplot(111)
+        ax.plot(x, y, linewidth=2, color='royalblue')
+        ax.set_ylim(self.vmin, self.vmax)
         ax.set_xlim(x[0], x[-1])
-        ax.set_ylim(gmin, gmax)
         ax.set_xlabel("Nodo (X)")
         ax.set_ylabel("Amplitud")
-        ax.set_title(f"Onda 1D – Paso {k}/{len(frames)}")
-        if show_peak:
-            i0 = int(np.argmax(np.abs(y)))
-            ax.axvline(x[i0], linestyle="--", linewidth=1)
-            ax.scatter([x[i0]],[y[i0]], s=16)
-        frame = fig_to_rgb(fig); plt.close(fig)
-        if writer: writer.append_data(frame)
-        else: imgs.append(frame)
+        ax.set_title(f"Simulación 1D | Paso {step_idx}/{total_steps}")
+        ax.grid(True, alpha=0.3)
 
-    if writer:
-        writer.close(); print(f"[1D] Video: {out_path} ({len(frames)} frames)")
-    else:
-        imageio.mimsave(out_path, imgs, duration=1.0/float(fps))
-        print(f"[1D] Video: {out_path} ({len(imgs)} frames)")
+        if self.cfg.mark_peak:
+            peak_idx = int(np.argmax(np.abs(y)))
+            ax.scatter([x[peak_idx]], [y[peak_idx]], color='red', s=20, zorder=5)
 
-# ---------- render 2D ----------
-def make_video_2d(frames, out_path, fps=12, dpi=110, fmt="gif",
-                  vmin=None, vmax=None, interp="nearest", colorbar=False):
-    if not frames:
-        print("[2D] No hay frames 2D"); return
-    if vmin is None or vmax is None:
-        vmin, vmax = collect_stats(frames)
+        image = self._fig_to_rgb(fig)
+        plt.close(fig)
+        return image
 
-    writer = None
-    if fmt == "mp4":
-        try:
-            writer = imageio.get_writer(out_path.replace(".gif", ".mp4"), fps=fps)
-            out_path = out_path.replace(".gif", ".mp4")
-        except Exception:
-            writer = None
+class Renderer2D(Renderer):
+    def render(self, data: np.ndarray, step_idx: int, total_steps: int) -> np.ndarray:
+        fig = plt.figure(figsize=(6, 6), dpi=self.cfg.dpi)
+        ax = fig.add_subplot(111)
+        
+        interp = None if self.cfg.interp == "none" else self.cfg.interp
+        im = ax.imshow(data, vmin=self.vmin, vmax=self.vmax, origin="upper", 
+                       aspect="auto", cmap='viridis', interpolation=interp)
+        
+        ax.set_title(f"Simulación 2D | Paso {step_idx}/{total_steps}")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        
+        if self.cfg.colorbar:
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-    imgs = []
-    for k, fp in enumerate(frames, 1):
-        A = read_frame(fp).astype(float)
-        fig = plt.figure(figsize=(5,5), dpi=dpi)
-        ax = plt.gca()
-        im = ax.imshow(A, vmin=vmin, vmax=vmax, origin="upper", aspect="auto",
-                       interpolation=None if interp=="none" else interp)
-        ax.set_xlabel("X (nodo)"); ax.set_ylabel("Y (nodo)")
-        ax.set_title(f"Onda 2D – Paso {k}/{len(frames)}")
-        if colorbar: plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        frame = fig_to_rgb(fig); plt.close(fig)
-        if writer: writer.append_data(frame)
-        else: imgs.append(frame)
+        image = self._fig_to_rgb(fig)
+        plt.close(fig)
+        return image
 
-    if writer:
-        writer.close(); print(f"[2D] Video: {out_path} ({len(frames)} frames)")
-    else:
-        imageio.mimsave(out_path, imgs, duration=1.0/float(fps))
-        print(f"[2D] Video: {out_path} ({len(imgs)} frames)")
+class VideoBuilder:
+    def __init__(self, output_path: Path, fps: int):
+        self.output_path = output_path
+        self.fps = fps
+        # Asegurar directorio de salida
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-# ---------- CLI ----------
+    def build(self, frame_generator: Generator[np.ndarray, None, None], total_frames: int):
+        print(f"[Video] Iniciando renderizado de {total_frames} frames...")
+        print(f"[Video] Salida: {self.output_path}")
+        
+        # Usar el writer como contexto asegura que se cierre el archivo correctamente
+        with imageio.get_writer(self.output_path, fps=self.fps) as writer:
+            for frame in tqdm(frame_generator, total=total_frames, unit="frame"):
+                writer.append_data(frame)
+        
+        print("[Video] Renderizado completado exitosamente.")
+
+def scan_limits(files: List[Path]) -> Tuple[float, float]:
+    """Escanea todos los archivos para encontrar el min/max global."""
+    print("[Stats] Calculando límites globales (vmin/vmax)...")
+    gmin, gmax = float('inf'), float('-inf')
+    
+    for fp in tqdm(files, desc="Escaneando", unit="file"):
+        data = FrameLoader.load(fp)
+        if data.size > 0:
+            gmin = min(gmin, data.min())
+            gmax = max(gmax, data.max())
+            
+    if gmin == float('inf'): return -1.0, 1.0
+    if gmin == gmax: gmax += 1e-9
+    return gmin, gmax
+
 def main():
-    pa = argparse.ArgumentParser(description="Generar GIF/MP4 1D/2D desde frames")
-    pa.add_argument("folder", help="carpeta con frames (p.ej. results/frames)")
-    pa.add_argument("--mode", choices=["auto","1d","2d"], default="auto",
-                    help="auto: detecta; 1d: sólo 1D; 2d: sólo 2D")
-    pa.add_argument("--fps", type=int, default=12)
-    pa.add_argument("--outdir", default="videos")
-    pa.add_argument("--format", choices=["gif","mp4"], default="gif")
-    pa.add_argument("--dpi", type=int, default=110)
+    parser = argparse.ArgumentParser(description="Generador de Video HPC (Refactorizado)")
+    parser.add_argument("folder", type=Path, help="Carpeta con archivos .dat/.csv")
+    parser.add_argument("--mode", choices=["auto", "1d", "2d"], default="auto", help="Modo de renderizado")
+    parser.add_argument("--fps", type=int, default=20, help="Cuadros por segundo")
+    parser.add_argument("--outdir", type=Path, default=Path("videos"), help="Directorio de salida")
+    parser.add_argument("--format", choices=["gif", "mp4"], default="mp4", help="Formato de salida")
+    parser.add_argument("--dpi", type=int, default=100, help="Calidad de imagen (DPI)")
+    
+    # Opciones específicas
+    parser.add_argument("--downsample", type=int, help="[1D] Reducir puntos para graficar más rápido")
+    parser.add_argument("--zoom1d", type=int, help="[1D] Zoom alrededor del pico")
+    parser.add_argument("--zero-center-1d", action="store_true", help="[1D] Centrar eje Y en 0")
+    parser.add_argument("--mark-peak", action="store_true", help="[1D] Marcar el máximo con un punto")
+    parser.add_argument("--interp", choices=["nearest", "bilinear", "none"], default="nearest", help="[2D] Interpolación")
+    parser.add_argument("--colorbar", action="store_true", help="[2D] Mostrar barra de color")
 
-    # 1D extras
-    pa.add_argument("--downsample", type=int, default=None)
-    pa.add_argument("--zoom1d", type=int, default=None)
-    pa.add_argument("--zero-center-1d", action="store_true")
-    pa.add_argument("--mark-peak", action="store_true")
+    args = parser.parse_args()
 
-    # 2D extras
-    pa.add_argument("--interp", choices=["nearest","bilinear","none"], default="nearest")
-    pa.add_argument("--colorbar", action="store_true")
-    args = pa.parse_args()
-
-    files = list_frames(args.folder)
+    # 1. Buscar archivos
+    if not args.folder.exists():
+        sys.exit(f"Error: La carpeta {args.folder} no existe.")
+        
+    files = sorted(list(args.folder.glob("amp_t*.*")))
     if not files:
-        print("No se encontraron frames en", args.folder); sys.exit(1)
+        sys.exit("Error: No se encontraron archivos 'amp_t*.*' en la carpeta.")
 
-    f1d, f2d = split_1d_2d(files)
-    print(f"[scan] {len(f1d)} frames 1D, {len(f2d)} frames 2D detectados")
+    # 2. Detectar modo si es auto
+    mode = args.mode
+    if mode == "auto":
+        mode = FrameLoader.detect_mode(files)
+        print(f"[Info] Modo detectado automáticamente: {mode.upper()}")
 
-    os.makedirs(args.outdir, exist_ok=True)
+    # 3. Calcular límites globales (pre-pass)
+    limits = scan_limits(files)
+    print(f"[Stats] Rango detectado: [{limits[0]:.4f}, {limits[1]:.4f}]")
 
-    if args.mode in ("auto","1d") and f1d:
-        make_video_1d(
-            f1d, os.path.join(args.outdir, "onda_1d.gif"),
-            fps=args.fps, downsample=args.downsample, zoom1d=args.zoom1d,
-            zero_center=args.zero_center_1d, show_peak=args.mark_peak,
-            dpi=args.dpi, fmt=args.format
-        )
-    elif args.mode == "1d" and not f1d:
-        print("[1D] No se detectaron frames 1D (ni .dat ni .csv de una sola fila/columna).")
+    # 4. Configurar Renderizador
+    renderer: Renderer
+    if mode == "1d":
+        renderer = Renderer1D(args, limits)
+    else:
+        renderer = Renderer2D(args, limits)
 
-    if args.mode in ("auto","2d") and f2d:
-        make_video_2d(
-            f2d, os.path.join(args.outdir, "onda_2d.gif"),
-            fps=args.fps, interp=args.interp, colorbar=args.colorbar,
-            dpi=args.dpi, fmt=args.format
-        )
-    elif args.mode == "2d" and not f2d:
-        print("[2D] No se detectaron frames 2D (.csv con más de 1 fila y 1 columna).")
+    # 5. Generador de frames (Lazy Evaluation)
+    def frame_generator():
+        for i, fp in enumerate(files):
+            data = FrameLoader.load(fp)
+            if data.size > 0:
+                yield renderer.render(data, i + 1, len(files))
+
+    # 6. Construir Video
+    out_file = args.outdir / f"video_{mode}.{args.format}"
+    builder = VideoBuilder(out_file, args.fps)
+    builder.build(frame_generator(), len(files))
 
 if __name__ == "__main__":
     main()
