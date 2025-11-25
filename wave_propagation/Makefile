@@ -29,8 +29,7 @@ $(TARGET): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET) *.o
-	rm -rf $(RESULTS_DIR) $(VIDEOS_DIR)
+	$(PY) -c "import shutil, os, glob; [os.remove(f) for f in glob.glob('*.o')] + [os.remove(f) for f in glob.glob('$(TARGET)') if os.path.exists(f)] + [os.remove(f) for f in glob.glob('$(TARGET).exe') if os.path.exists(f)]; shutil.rmtree('$(RESULTS_DIR)', ignore_errors=True); shutil.rmtree('$(VIDEOS_DIR)', ignore_errors=True)"
 
 .PHONY: clean benchmark analysis amdahl help \
         video1d video2d video_all frames_clean videos_dir matrix analyze_matrix

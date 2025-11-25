@@ -1,27 +1,20 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional, Union, Generator
+from typing import List, Tuple, Generator
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import cm
+from matplotlib.colors import LightSource # Para sombras y profundidad 3D
+from mpl_toolkits.mplot3d import Axes3D 
 import imageio.v2 as imageio
 
-# Intentar importar tqdm para barra de progreso, fallback si no existe
+# Intentar importar tqdm
 try:
     from tqdm import tqdm
 except ImportError:
-    # Mock simple si no está instalado
     def tqdm(iterable, **kwargs): return iterable
-
-# Configuración no interactiva para servidores/WSL
-matplotlib.use("Agg")
-
-class FrameLoader:
-    """Maneja la carga de archivos de datos."""
-    @staticmethod
-    def load(path: Path) -> np.ndarray:
-        try:
             if path.suffix == ".csv":
                 return np.loadtxt(path, delimiter=",")
             return np.loadtxt(path)
@@ -31,39 +24,31 @@ class FrameLoader:
 
     @staticmethod
     def detect_mode(files: List[Path], probe_count: int = 10) -> str:
-        """Detecta si los archivos son 1D o 2D inspeccionando los primeros."""
         votes_1d = 0
         votes_2d = 0
-        
         for fp in files[:probe_count]:
             data = FrameLoader.load(fp)
             if data.size == 0: continue
-            
-            # Criterio: 1D si es vector o dimensión 1 en algún eje
             if data.ndim == 1 or (data.ndim == 2 and 1 in data.shape):
                 votes_1d += 1
             else:
                 votes_2d += 1
-        
-        if votes_2d > votes_1d:
-            return "2d"
-        return "1d"
+        return "2d" if votes_2d > votes_1d else "1d"
 
 class Renderer:
-    """Clase base abstracta para renderizadores."""
     def __init__(self, config: argparse.Namespace, global_limits: Tuple[float, float]):
         self.cfg = config
         self.vmin, self.vmax = global_limits
-        # Ajuste de cero centrado si se requiere
-        if hasattr(self.cfg, 'zero_center_1d') and self.cfg.zero_center_1d:
+        
+        # Margen de seguridad para evitar errores de renderizado si plano
+        if abs(self.vmax - self.vmin) < 1e-5:
+            self.vmax += 0.1
+            
+        if hasattr(self.cfg, 'zero_center') and self.cfg.zero_center:
              limit = max(abs(self.vmin), abs(self.vmax))
              self.vmin, self.vmax = -limit, limit
 
-    def render(self, data: np.ndarray, step_idx: int, total_steps: int) -> np.ndarray:
-        raise NotImplementedError
-
     def _fig_to_rgb(self, fig: plt.Figure) -> np.ndarray:
-        """Convierte una figura de Matplotlib a un array RGB."""
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
@@ -74,53 +59,67 @@ class Renderer1D(Renderer):
         y = data.ravel()
         x = np.arange(len(y))
 
-        # Downsampling para rendimiento
-        if self.cfg.downsample and len(x) > self.cfg.downsample:
-            step = int(np.ceil(len(x) / self.cfg.downsample))
-            x = x[::step]
-            y = y[::step]
-
-        # Zoom
-        if self.cfg.zoom1d and self.cfg.zoom1d > 0:
-            peak = int(np.argmax(np.abs(y)))
-            L = max(0, peak - self.cfg.zoom1d)
-            R = min(len(y)-1, peak + self.cfg.zoom1d)
-            x = x[L:R+1]
-            y = y[L:R+1]
-
-        fig = plt.figure(figsize=(8, 4), dpi=self.cfg.dpi)
+        fig = plt.figure(figsize=(8, 5), dpi=self.cfg.dpi)
         ax = fig.add_subplot(111)
-        ax.plot(x, y, linewidth=2, color='royalblue')
+        
+        # 1. Línea principal (más suave y gruesa)
+        ax.plot(x, y, linewidth=2, color='#0066cc', label='Amplitud')
+        
+        # 2. Relleno bajo la curva (Mejora visual clave)
+        ax.fill_between(x, y, color='#0066cc', alpha=0.2)
+        
+        # 3. Estilizado
         ax.set_ylim(self.vmin, self.vmax)
         ax.set_xlim(x[0], x[-1])
-        ax.set_xlabel("Nodo (X)")
-        ax.set_ylabel("Amplitud")
-        ax.set_title(f"Simulación 1D | Paso {step_idx}/{total_steps}")
-        ax.grid(True, alpha=0.3)
-
-        if self.cfg.mark_peak:
-            peak_idx = int(np.argmax(np.abs(y)))
-            ax.scatter([x[peak_idx]], [y[peak_idx]], color='red', s=20, zorder=5)
-
+        ax.grid(True, linestyle='--', color='gray', alpha=0.3)
+        ax.axhline(0, color='black', linewidth=0.8, alpha=0.5) # Línea base en 0
+        
+        ax.set_xlabel("Nodo (Posición)")
+        ax.set_ylabel("Amplitud u(x)")
+        ax.set_title(f"Propagación 1D — Paso {step_idx}/{total_steps}", fontweight='bold')
+        
+        fig.tight_layout()
         image = self._fig_to_rgb(fig)
         plt.close(fig)
         return image
 
-class Renderer2D(Renderer):
+class Renderer3D(Renderer):
     def render(self, data: np.ndarray, step_idx: int, total_steps: int) -> np.ndarray:
-        fig = plt.figure(figsize=(6, 6), dpi=self.cfg.dpi)
-        ax = fig.add_subplot(111)
+        fig = plt.figure(figsize=(10, 7), dpi=self.cfg.dpi)
+        # Ajuste de perspectiva
+        ax = fig.add_subplot(111, projection='3d')
         
-        interp = None if self.cfg.interp == "none" else self.cfg.interp
-        im = ax.imshow(data, vmin=self.vmin, vmax=self.vmax, origin="upper", 
-                       aspect="auto", cmap='viridis', interpolation=interp)
+        h, w = data.shape
+        X = np.arange(w)
+        Y = np.arange(h)
+        X, Y = np.meshgrid(X, Y)
         
-        ax.set_title(f"Simulación 2D | Paso {step_idx}/{total_steps}")
+        # 1. Crear fuente de luz para sombras (Efecto "plástico/realista")
+        ls = LightSource(azdeg=315, altdeg=45)
+        # Mapear colores según altura (z) y sombras según gradiente
+        rgb = ls.shade(data, cmap=cm.coolwarm, vert_exag=0.1, blend_mode='soft')
+
+        # 2. Plot de superficie con sombreado
+        surf = ax.plot_surface(X, Y, data, facecolors=rgb,
+                               linewidth=0, antialiased=True, shade=False,
+                               rstride=1, cstride=1) # rstride/cstride 1 para máxima calidad
+
+        ax.set_zlim(self.vmin, self.vmax)
+        
+        # Etiquetas
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
+        ax.set_zlabel("Amplitud")
+        ax.set_title(f"Propagación 2D — Paso {step_idx}/{total_steps}", fontweight='bold')
+
+        # Vista isométrica mejorada
+        ax.view_init(elev=35, azim=-45)
         
-        if self.cfg.colorbar:
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        # Quitar fondo gris de los paneles 3D para limpieza
+        ax.xaxis.pane.fill = False
+        ax.yaxis.pane.fill = False
+        ax.zaxis.pane.fill = False
+        ax.grid(True, alpha=0.2)
 
         image = self._fig_to_rgb(fig)
         plt.close(fig)
@@ -130,90 +129,62 @@ class VideoBuilder:
     def __init__(self, output_path: Path, fps: int):
         self.output_path = output_path
         self.fps = fps
-        # Asegurar directorio de salida
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
     def build(self, frame_generator: Generator[np.ndarray, None, None], total_frames: int):
-        print(f"[Video] Iniciando renderizado de {total_frames} frames...")
-        print(f"[Video] Salida: {self.output_path}")
-        
-        # Usar el writer como contexto asegura que se cierre el archivo correctamente
-        with imageio.get_writer(self.output_path, fps=self.fps) as writer:
-            for frame in tqdm(frame_generator, total=total_frames, unit="frame"):
+        print(f"[Video] Guardando en: {self.output_path}")
+        # Usamos macro_block_size=None para evitar warnings de FFMPEG si el tamaño no es múltiplo de 16
+        with imageio.get_writer(self.output_path, fps=self.fps, macro_block_size=None) as writer:
+            for frame in tqdm(frame_generator, total=total_frames):
                 writer.append_data(frame)
-        
-        print("[Video] Renderizado completado exitosamente.")
+        print("[Video] ¡Listo!")
 
 def scan_limits(files: List[Path]) -> Tuple[float, float]:
-    """Escanea todos los archivos para encontrar el min/max global."""
-    print("[Stats] Calculando límites globales (vmin/vmax)...")
+    print("[Stats] Analizando límites globales...")
     gmin, gmax = float('inf'), float('-inf')
-    
-    for fp in tqdm(files, desc="Escaneando", unit="file"):
+    for fp in tqdm(files, desc="Escaneando"):
         data = FrameLoader.load(fp)
         if data.size > 0:
             gmin = min(gmin, data.min())
             gmax = max(gmax, data.max())
-            
     if gmin == float('inf'): return -1.0, 1.0
-    if gmin == gmax: gmax += 1e-9
     return gmin, gmax
 
 def main():
-    parser = argparse.ArgumentParser(description="Generador de Video HPC (Refactorizado)")
-    parser.add_argument("folder", type=Path, help="Carpeta con archivos .dat/.csv")
-    parser.add_argument("--mode", choices=["auto", "1d", "2d"], default="auto", help="Modo de renderizado")
-    parser.add_argument("--fps", type=int, default=20, help="Cuadros por segundo")
-    parser.add_argument("--outdir", type=Path, default=Path("videos"), help="Directorio de salida")
-    parser.add_argument("--format", choices=["gif", "mp4"], default="mp4", help="Formato de salida")
-    parser.add_argument("--dpi", type=int, default=100, help="Calidad de imagen (DPI)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("folder", type=Path, help="Carpeta con datos")
+    parser.add_argument("--mode", choices=["auto", "1d", "2d"], default="auto")
+    parser.add_argument("--fps", type=int, default=20)
+    parser.add_argument("--outdir", type=Path, default=Path("videos"))
+    parser.add_argument("--format", choices=["gif", "mp4"], default="mp4")
+    parser.add_argument("--dpi", type=int, default=120) # DPI más alto para mejor calidad
+    parser.add_argument("--zero-center", action="store_true")
     
-    # Opciones específicas
-    parser.add_argument("--downsample", type=int, help="[1D] Reducir puntos para graficar más rápido")
-    parser.add_argument("--zoom1d", type=int, help="[1D] Zoom alrededor del pico")
-    parser.add_argument("--zero-center-1d", action="store_true", help="[1D] Centrar eje Y en 0")
-    parser.add_argument("--mark-peak", action="store_true", help="[1D] Marcar el máximo con un punto")
-    parser.add_argument("--interp", choices=["nearest", "bilinear", "none"], default="nearest", help="[2D] Interpolación")
-    parser.add_argument("--colorbar", action="store_true", help="[2D] Mostrar barra de color")
-
     args = parser.parse_args()
 
-    # 1. Buscar archivos
     if not args.folder.exists():
-        sys.exit(f"Error: La carpeta {args.folder} no existe.")
+        sys.exit("Carpeta no encontrada.")
         
     files = sorted(list(args.folder.glob("amp_t*.*")))
     if not files:
-        sys.exit("Error: No se encontraron archivos 'amp_t*.*' en la carpeta.")
+        sys.exit("No hay archivos amp_t*.*")
 
-    # 2. Detectar modo si es auto
     mode = args.mode
     if mode == "auto":
         mode = FrameLoader.detect_mode(files)
-        print(f"[Info] Modo detectado automáticamente: {mode.upper()}")
+        print(f"[Info] Modo detectado: {mode.upper()}")
 
-    # 3. Calcular límites globales (pre-pass)
     limits = scan_limits(files)
-    print(f"[Stats] Rango detectado: [{limits[0]:.4f}, {limits[1]:.4f}]")
+    
+    # Seleccionar renderizador
+    renderer = Renderer1D(args, limits) if mode == "1d" else Renderer3D(args, limits)
 
-    # 4. Configurar Renderizador
-    renderer: Renderer
-    if mode == "1d":
-        renderer = Renderer1D(args, limits)
-    else:
-        renderer = Renderer2D(args, limits)
-
-    # 5. Generador de frames (Lazy Evaluation)
-    def frame_generator():
+    def frame_gen():
         for i, fp in enumerate(files):
-            data = FrameLoader.load(fp)
-            if data.size > 0:
-                yield renderer.render(data, i + 1, len(files))
+            yield renderer.render(FrameLoader.load(fp), i + 1, len(files))
 
-    # 6. Construir Video
-    out_file = args.outdir / f"video_{mode}.{args.format}"
-    builder = VideoBuilder(out_file, args.fps)
-    builder.build(frame_generator(), len(files))
+    out_file = args.outdir / f"video_{mode}_HQ.{args.format}"
+    VideoBuilder(out_file, args.fps).build(frame_gen(), len(files))
 
 if __name__ == "__main__":
     main()
