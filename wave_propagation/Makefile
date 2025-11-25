@@ -104,7 +104,7 @@ matrix:
 	@$(PY) scripts/run_matrix.py
 
 analyze_matrix:
-@$(PY) scripts/analyze_matrix.py
+	@$(PY) scripts/analyze_matrix.py
 
 demo_bonus: $(TARGET)
 	@echo "Corriendo simulacion con Ruido por Nodo (Bonus)..."
