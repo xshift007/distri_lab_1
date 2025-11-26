@@ -58,16 +58,18 @@ graphs: $(TARGET) dirs
 
 # 2. Generar Videos HQ
 videos: $(TARGET) dirs
-	@echo "=== Video 1D (HQ) ==="
-	$(MAKE) frames_clean
-	./$(TARGET) --network 1d --N 200 --steps 500 --dump-frames --frame-every 5 --noise single --S0 2.0
-	$(PY) scripts/make_video.py "$(FRAMES_DIR)" --mode 1d --format gif --fps 20 --outdir "$(VIDEOS_DIR)" --zero-center
-	
-	@echo "=== Video 2D (3D Surface) ==="
-	$(MAKE) frames_clean
+        @echo "=== Video 1D (HQ) ==="
+        $(MAKE) frames_clean
+        ./$(TARGET) --network 1d --N 200 --steps 500 --dump-frames --frame-every 5 --noise single --S0 2.0
+        $(PY) scripts/make_video.py "$(FRAMES_DIR)" --mode 1d --format gif --fps 20 --outdir "$(VIDEOS_DIR)" --zero-center \
+                --mark-peak --interp bilinear --cmap viridis --colorbar --zoom1d 0.5
+
+        @echo "=== Video 2D (3D Surface) ==="
+        $(MAKE) frames_clean
     # AUMENTADO A 500 STEPS PARA VIDEO MÁS LARGO
-	./$(TARGET) --network 2d --Lx 100 --Ly 100 --steps 500 --dump-frames --frame-every 5 --noise single --S0 5.0
-	$(PY) scripts/make_video.py "$(FRAMES_DIR)" --mode 2d --format gif --fps 15 --outdir "$(VIDEOS_DIR)" --zero-center
+        ./$(TARGET) --network 2d --Lx 100 --Ly 100 --steps 500 --dump-frames --frame-every 5 --noise single --S0 5.0
+        $(PY) scripts/make_video.py "$(FRAMES_DIR)" --mode 2d --format gif --fps 15 --outdir "$(VIDEOS_DIR)" --zero-center \
+                --mark-peak --interp bilinear --cmap viridis --colorbar --zoom1d 0.5
 	
 	@echo ">>> Videos listos en $(VIDEOS_DIR)/"
 
