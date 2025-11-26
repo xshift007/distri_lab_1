@@ -18,7 +18,6 @@ from matplotlib.colors import Normalize
 try:
     from tqdm import tqdm
 except ImportError:
-
     def tqdm(iterable, **kwargs):
         return iterable
 
@@ -105,9 +104,11 @@ class Renderer:
         if abs(self.vmax - self.vmin) < 1e-3:
             self.vmax += 0.1
 
-        # Reescala centrando en cero si se pidió (esto se usa en 1D; en 2D
-        # recalculamos por frame, pero mantenemos la bandera aquí)
+        # Reescala centrando en cero si se pidió
         self.zero_center = getattr(self.cfg, "zero_center", False)
+        if self.zero_center:
+            limit = max(abs(self.vmin), abs(self.vmax))
+            self.vmin, self.vmax = -limit, limit
 
     def _fig_to_rgb(self, fig):
         fig.canvas.draw()
@@ -181,8 +182,11 @@ class Renderer1D(Renderer):
 
 class Renderer3D(Renderer):
     """
-    Visualización para la red 2D como superficie 3D al estilo clásico:
-    recorta alrededor del pico y re-escala la altura para que se vea la “montaña”.
+    Visualización para la red 2D como superficie 3D.
+    - Recorta la región alrededor del pico para enfocar la zona activa.
+    - Aplica una exageración vertical fija para que la montaña sea visible
+      sin hacer el primer frame demasiado grande.
+    - Usa la escala de colores basada en la amplitud física (no se reescala).
     """
 
     def render(self, data, step, total):
@@ -193,73 +197,55 @@ class Renderer3D(Renderer):
         if z.size == 0:
             return None
 
-        # Aseguramos 2D
+        # Asegurar 2D
         if z.ndim != 2:
-            # Intento básico de reshaping si viniera aplanado
+            # Intento simple de reshape si está aplanado
             n = int(np.sqrt(z.size))
             z = z.reshape((n, -1))
 
         # Suavizado opcional
         z = _smooth_2d(z, self.cfg.interp)
 
-        # --- DEBUG: rango del primer frame ---
-        if step == 1:
-            print(
-                f"[DEBUG 2D] Frame {step}: shape={z.shape}, "
-                f"min={z.min():.3e}, max={z.max():.3e}, "
-                f"nonzero={np.count_nonzero(z)}"
-            )
+        # Si no hay actividad, no hay nada que mostrar
+        if not np.any(np.abs(z) > 0):
+            return None
 
         h, w = z.shape
         abs_z = np.abs(z)
-        if not np.any(abs_z > 0):
-            # Nada interesante que mostrar
-            return None
-
-        # Pico global
         peak_y, peak_x = np.unravel_index(np.argmax(abs_z), z.shape)
 
-        # Ventana alrededor del pico (25% del tamaño o al menos 7x7)
+        # Definir ventana alrededor del pico: 25% del tamaño de la malla o al menos 7x7
         base_window = min(h, w)
         window = max(7, int(base_window * 0.25))
         half = window // 2
-
         y0 = max(0, peak_y - half)
         y1 = min(h, peak_y + half + 1)
         x0 = max(0, peak_x - half)
         x1 = min(w, peak_x + half + 1)
-
         z_crop = z[y0:y1, x0:x1]
         hc, wc = z_crop.shape
 
-        # Grilla 2D para la superficie
+        # Grilla para la superficie recortada
         X, Y = np.meshgrid(np.arange(wc), np.arange(hc))
 
-        # Escala de colores basada en la amplitud física (no re-escalada)
+        # Escala de colores según la amplitud física
         vmin, vmax = float(z_crop.min()), float(z_crop.max())
         if self.zero_center:
             lim = max(abs(vmin), abs(vmax))
             vmin, vmax = -lim, lim
         if abs(vmax - vmin) < 1e-9:
             vmax = vmin + 1e-3
-
         norm = Normalize(vmin=vmin, vmax=vmax)
         cmap = cm.get_cmap(self.cfg.cmap)
         facecolors = cmap(norm(z_crop))
 
-        # Re-escalar altura para que se vea la montaña (target ~30 unidades)
-        amp = float(np.max(np.abs(z_crop)))
-        if amp < 1e-9:
-            scale = 1.0
-        else:
-            target_height = 30.0
-            scale = target_height / amp
-        z_plot = z_crop * scale
+        # Exageración vertical fija para evitar un primer frame gigante
+        vert_exag = 5.0
+        z_plot = z_crop * vert_exag
         height = float(np.max(np.abs(z_plot)))
 
         fig = plt.figure(figsize=(6, 5), dpi=self.cfg.dpi)
         ax = fig.add_subplot(111, projection="3d")
-
         surf = ax.plot_surface(
             X,
             Y,
@@ -268,8 +254,6 @@ class Renderer3D(Renderer):
             linewidth=0.0,
             antialiased=True,
             shade=False,
-            rstride=1,
-            cstride=1,
         )
 
         # Límites de altura simétricos
@@ -277,14 +261,13 @@ class Renderer3D(Renderer):
 
         ax.set_xlabel("X (width)")
         ax.set_ylabel("Y (height)")
-        ax.set_zlabel("Amplitud (re-escalada)")
+        ax.set_zlabel(f"Amplitud (x{vert_exag})")
         ax.set_title(f"Evolución de la onda (Paso {step}/{total})", fontweight="bold")
 
-        # Vista 3D “clásica”
+        # Vista 3D clásica
         ax.view_init(elev=30, azim=-45)
-
-        # Intentar proporción de caja agradable
         try:
+            # Ajuste de proporciones para que la Z no quede enana
             ax.set_box_aspect((wc, hc, height if height > 0 else 1.0))
         except Exception:
             pass
@@ -293,6 +276,7 @@ class Renderer3D(Renderer):
 
         # Marcar el pico dentro de la ventana recortada
         if self.cfg.mark_peak:
+            # Coordenadas relativas dentro de la ventana recortada
             peak_y_c = peak_y - y0
             peak_x_c = peak_x - x0
             if 0 <= peak_y_c < hc and 0 <= peak_x_c < wc:
@@ -306,7 +290,7 @@ class Renderer3D(Renderer):
                 )
                 ax.legend(loc="upper right")
 
-        # Colorbar en escala física (no re-escalada)
+        # Colorbar basada en la amplitud física
         if self.cfg.colorbar:
             mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
             mappable.set_array([])
@@ -328,7 +312,7 @@ def analyze_data(files: Iterable[Path]):
     """
     Escaneo global para obtener min/max y un bounding box aproximado.
     Para 3D usamos principalmente min/max globales; el recorte fino se
-    hace por frame en Renderer3D.
+    realiza por frame en Renderer3D.
     """
     print("[Info] Analizando datos para Auto-Crop y Escala...")
     gmin, gmax = float("inf"), float("-inf")
@@ -342,8 +326,8 @@ def analyze_data(files: Iterable[Path]):
         if d is None or d.size == 0:
             continue
 
-        gmin = min(gmin, float(d.min()))
-        gmax = max(gmax, float(d.max()))
+        gmin = min(gmin, float(np.min(d)))
+        gmax = max(gmax, float(np.max(d)))
 
         active_mask = np.abs(d) > threshold
         if np.any(active_mask):
