@@ -160,7 +160,7 @@ El script contiene tres clases internas:
 
 1. **`Renderer1D`**: genera gráficos 1D (curva y área bajo la curva) con opciones de marcado de pico y zoom. Se utiliza la configuración global de Matplotlib sin especificar colores absolutos salvo para destacar el pico.
 2. **`Renderer3D`**: crea superficies 3D para visualizar las mallas 2D. Para evitar que las amplitudes pequeñas queden planas, recorta alrededor de la región activa y escala la altura del gráfico de manera que el pico ocupe una proporción significativa del eje z; los colores se asignan según la amplitud física, y se puede añadir barra de colores.
-3. **`Renderer2D`** (no activado por defecto): opcionalmente puede dibujar los datos 2D como heatmap 2D si se decide prescindir de la vista 3D.
+
 
 Estas clases cargan los frames desde archivos `.txt` o `.csv`, realizan el downsampling e interpolación solicitados y convierten cada figura en un array RGB que se pasa a `imageio` para crear el video final.
 
