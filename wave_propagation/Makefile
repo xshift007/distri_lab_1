@@ -65,7 +65,8 @@ videos: $(TARGET) dirs
 	
 	@echo "=== Video 2D (3D Surface) ==="
 	$(MAKE) frames_clean
-	./$(TARGET) --network 2d --Lx 100 --Ly 100 --steps 300 --dump-frames --frame-every 5 --noise single --S0 5.0
+    # AUMENTADO A 500 STEPS PARA VIDEO MÁS LARGO
+	./$(TARGET) --network 2d --Lx 100 --Ly 100 --steps 500 --dump-frames --frame-every 5 --noise single --S0 5.0
 	$(PY) scripts/make_video.py "$(FRAMES_DIR)" --mode 2d --format gif --fps 15 --outdir "$(VIDEOS_DIR)" --zero-center
 	
 	@echo ">>> Videos listos en $(VIDEOS_DIR)/"
