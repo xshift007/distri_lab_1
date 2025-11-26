@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional
 
 import imageio.v2 as imageio
 import matplotlib
@@ -53,15 +53,6 @@ class FrameLoader:
             else:
                 votes_2d += 1
         return "2d" if votes_2d > votes_1d else "1d"
-
-
-def _safe_range_from_activity(data: np.ndarray, padding: int = 5) -> Optional[Tuple[int, int]]:
-    """Detecta el rango activo de un vector 1D para aplicar zoom."""
-
-    active = np.where(np.abs(data) > 0.01)[0]
-    if active.size == 0:
-        return None
-    return int(active.min() - padding), int(active.max() + padding)
 
 
 def _downsample(data: np.ndarray, factor: Optional[int]) -> np.ndarray:
@@ -127,13 +118,16 @@ class Renderer1D(Renderer):
         ax.set_ylim(self.vmin, self.vmax)
 
         if self.cfg.zoom1d:
-            # Centrar el zoom en la actividad detectada
-            zoom_range = _safe_range_from_activity(y, padding=self.cfg.zoom1d)
-            if zoom_range:
-                xmin, xmax = max(0, zoom_range[0]), min(len(y) - 1, zoom_range[1])
-                ax.set_xlim(xmin, xmax)
-            else:
+            fraction = max(0.0, min(1.0, float(self.cfg.zoom1d)))
+            if fraction == 0:
                 ax.set_xlim(x[0], x[-1])
+            else:
+                window = max(2, int(len(y) * fraction))
+                center = int(np.argmax(np.abs(y)))
+                half = window // 2
+                xmin = max(0, center - half)
+                xmax = min(len(y) - 1, center + half)
+                ax.set_xlim(xmin, xmax)
         elif self.xlim:
             ax.set_xlim(self.xlim)
         else:
@@ -271,12 +265,12 @@ def main():
     p.add_argument("--dpi", type=int, default=120, help="Resolución al renderizar")
     p.add_argument("--zero-center", action="store_true", help="Centra la escala en cero para magnitudes positivas/negativas")
     p.add_argument("--downsample", type=int, help="Submuestrea los datos para acelerar el render (factor entero)")
-    p.add_argument("--zoom1d", type=int, help="Ventana de nodos alrededor de la actividad para modo 1D")
+    p.add_argument("--zoom1d", type=float, help="Fracción del dominio a mostrar centrado en el pico 1D (0-1)")
     p.add_argument("--mark-peak", action="store_true", help="Resalta el pico máximo en cada frame")
-    p.add_argument("--interp", default="nearest", choices=["nearest", "bilinear", "bicubic"],
+    p.add_argument("--interp", default="bilinear", choices=["nearest", "bilinear", "bicubic"],
                    help="Interpolación/suavizado para superficies 2D")
     p.add_argument("--colorbar", action="store_true", help="Muestra barra de color en modo 2D")
-    p.add_argument("--cmap", default="plasma", help="Colormap a usar en modo 2D")
+    p.add_argument("--cmap", default="viridis", help="Colormap a usar en modo 2D")
     
     args = p.parse_args()
     if not args.folder.exists(): sys.exit("Carpeta no encontrada")
